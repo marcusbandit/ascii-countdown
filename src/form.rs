@@ -1,8 +1,10 @@
 //! The add and edit dialog: a name, countdown or stopwatch, and a time.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use unicode_width::UnicodeWidthStr;
 
 use crate::duration;
+use crate::manager::Key;
 use crate::screen::{truncate, Grid, Ink, Rect, Style};
 use crate::timer::{Mode, Timer};
 
@@ -51,7 +53,7 @@ impl Form {
     pub fn new_clock() -> Form {
         Form {
             target: None,
-            kind: Kind::Countdown,
+            kind: Kind::Stopwatch,
             name: String::new(),
             time: String::new(),
             focus: Field::Name,
@@ -154,6 +156,26 @@ impl Form {
         }
     }
 
+    /// The keys that work in the dialog, for the bar along the bottom.
+    pub fn keys(&self) -> Vec<Key> {
+        let mut keys = vec![
+            (
+                "enter",
+                if self.target.is_some() {
+                    "save"
+                } else {
+                    "start"
+                },
+            ),
+            ("tab", "next"),
+        ];
+        if self.focus == Field::Kind {
+            keys.push(("space", "switch"));
+        }
+        keys.push(("esc", "close"));
+        keys
+    }
+
     /// True when a `cols` x `rows` screen has room for the whole dialog.
     pub fn fits(cols: usize, rows: usize) -> bool {
         cols >= MIN_W && rows >= HEIGHT
@@ -183,9 +205,12 @@ impl Form {
         grid.put(r.x + 2, r.y, heading, accent, r.x + w - 1);
 
         let (x, end) = (r.x + 3, r.x + w - 2);
-        let value_x = x + 7;
+        let value_x = x + 6;
+        // The focused field gets a pointer as well as the accent, so focus
+        // shows without colour too.
         let label = |grid: &mut Grid, y: usize, text: &str, field: Field| {
             let style = if self.focus == field {
+                grid.put(x - 2, y, "›", accent, end);
                 accent
             } else {
                 Style::default()
@@ -193,17 +218,18 @@ impl Form {
             grid.put(x, y, text, style, end);
         };
 
-        // The text being typed, with a block cursor after it when focused.
+        // A text field: an underlined slot, so an empty one still shows where
+        // typing goes, with a block cursor after the text when focused.
         let text_row = |grid: &mut Grid, y: usize, value: &str, field: Field| {
-            let room = end.saturating_sub(value_x + 1);
-            let shown = truncate(value, room);
-            let after = grid.put(value_x, y, &shown, Style::default(), end);
+            let slot = Style {
+                underline: true,
+                ..Style::default()
+            };
+            grid.put(value_x, y, &" ".repeat(end - value_x), slot, end);
+            let shown = truncate(value, end.saturating_sub(value_x + 1));
+            let after = grid.put(value_x, y, &shown, slot, end);
             if self.focus == field {
-                let cursor = Style {
-                    reverse: true,
-                    ..Style::default()
-                };
-                grid.put(after, y, " ", cursor, end);
+                grid.put(after, y, " ", Style::default().reversed(), end);
             }
         };
 
@@ -211,27 +237,32 @@ impl Form {
         label(grid, y, "Name", Field::Name);
         text_row(grid, y, &self.name, Field::Name);
 
+        // The chosen type is swapped; colour only adds the focus.
         label(grid, y + 1, "Type", Field::Kind);
-        let chip = |kind: Kind| {
-            if self.kind != kind {
-                Style {
-                    dim: true,
-                    ..Style::default()
-                }
-            } else if self.focus == Field::Kind {
-                Style {
-                    reverse: true,
-                    ..accent
-                }
-            } else {
-                Style {
-                    reverse: true,
-                    ..Style::default()
-                }
-            }
+        let chip = |kind: Kind| match (self.kind == kind, self.focus == Field::Kind) {
+            (false, _) => Style::default(),
+            (true, true) => Style {
+                reverse: true,
+                ..accent
+            },
+            (true, false) => Style::default().reversed(),
         };
-        let after = grid.put(value_x, y + 1, " countdown ", chip(Kind::Countdown), end);
-        grid.put(after + 1, y + 1, " stopwatch ", chip(Kind::Stopwatch), end);
+        // Padded chips when they fit, bare words on the narrowest dialog.
+        let pad = if end - value_x >= 23 { " " } else { "" };
+        let after = grid.put(
+            value_x,
+            y + 1,
+            &format!("{pad}stopwatch{pad}"),
+            chip(Kind::Stopwatch),
+            end,
+        );
+        grid.put(
+            after + 1,
+            y + 1,
+            &format!("{pad}countdown{pad}"),
+            chip(Kind::Countdown),
+            end,
+        );
 
         if self.kind == Kind::Countdown {
             label(grid, y + 2, "Time", Field::Time);
@@ -240,13 +271,36 @@ impl Form {
 
         if let Some(e) = &self.error {
             let style = if color {
-                Style::fg(Ink::Red)
+                Style::fg(Ink::Red).bold()
             } else {
                 Style::default().bold()
             };
-            grid.put(x, y + 3, &truncate(e, end - x), style, end);
+            // Two rows at most: a longer error ends its second row with an ellipsis.
+            let width = end - x;
+            let mut lines = wrap(e, width);
+            if lines.len() > 2 {
+                lines[1] = format!("{}…", truncate(&lines[1..].join(" "), width - 1));
+            }
+            for (i, line) in lines.iter().take(2).enumerate() {
+                grid.put(x, y + 3 + i, line, style, end);
+            }
         }
     }
+}
+
+/// Splits `text` into lines of at most `width` columns, at spaces.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(l) if l.width() + 1 + word.width() <= width => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(truncate(word, width)),
+        }
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -266,9 +320,25 @@ mod tests {
     }
 
     #[test]
+    fn a_new_clock_starts_as_a_stopwatch() {
+        let mut f = Form::new_clock();
+        assert_eq!(f.kind, Kind::Stopwatch);
+        assert_eq!(
+            press(&mut f, KeyCode::Enter),
+            FormEvent::Save {
+                title: None,
+                mode: Mode::Stopwatch
+            }
+        );
+    }
+
+    #[test]
     fn a_new_countdown_needs_a_time() {
         let mut f = Form::new_clock();
         typed(&mut f, "Tea");
+        press(&mut f, KeyCode::Tab);
+        press(&mut f, KeyCode::Char('l'));
+        assert_eq!(f.kind, Kind::Countdown);
         assert_eq!(press(&mut f, KeyCode::Enter), FormEvent::Open);
         assert!(f.error.is_some());
         assert_eq!(f.focus, Field::Time);
@@ -289,6 +359,10 @@ mod tests {
         press(&mut f, KeyCode::Tab);
         assert_eq!(f.focus, Field::Kind);
         press(&mut f, KeyCode::Char('l'));
+        press(&mut f, KeyCode::Tab);
+        assert_eq!(f.focus, Field::Time);
+        press(&mut f, KeyCode::BackTab);
+        press(&mut f, KeyCode::Char(' '));
         assert_eq!(f.kind, Kind::Stopwatch);
         press(&mut f, KeyCode::Tab);
         assert_eq!(f.focus, Field::Name, "no time field to land on");
@@ -338,10 +412,66 @@ mod tests {
         assert!(g.find("New clock").is_some());
         assert!(g.find("Tea").is_some());
         assert!(g.find("countdown").is_some());
+        assert!(g.find("› Name").is_some(), "focus shows as a pointer");
         // A screen too small for it is left alone rather than overrun.
         assert!(!Form::fits(19, 10));
         let mut tiny = Grid::new(19, 10);
         f.draw(&mut tiny, true);
         assert!(tiny.find("New").is_none());
+    }
+
+    #[test]
+    fn a_long_error_wraps_instead_of_being_cut() {
+        let mut f = Form::edit(
+            0,
+            &Timer::new(
+                ClockSpec {
+                    mode: Mode::Countdown(Duration::from_secs(60)),
+                    title: None,
+                },
+                false,
+            ),
+        );
+        press(&mut f, KeyCode::Tab);
+        press(&mut f, KeyCode::Tab);
+        typed(&mut f, "x");
+        press(&mut f, KeyCode::Enter);
+        let e = f.error.clone().unwrap();
+        let mut g = Grid::new(80, 24);
+        f.draw(&mut g, true);
+        let last = e.split(' ').next_back().unwrap();
+        assert!(g.find(last).is_some(), "the end of {e:?} is on screen");
+        assert_eq!(wrap("aa bb cc", 5), vec!["aa bb", "cc"]);
+    }
+
+    #[test]
+    fn the_keys_name_what_enter_does() {
+        let f = Form::new_clock();
+        assert_eq!(f.keys()[0], ("enter", "start"));
+        let t = Timer::new(
+            ClockSpec {
+                mode: Mode::Stopwatch,
+                title: None,
+            },
+            false,
+        );
+        assert_eq!(Form::edit(0, &t).keys()[0], ("enter", "save"));
+    }
+
+    #[test]
+    fn the_narrowest_dialog_shows_both_types_and_ends_a_long_error_plainly() {
+        let mut f = Form::new_clock();
+        press(&mut f, KeyCode::Tab);
+        let mut g = Grid::new(MIN_W, HEIGHT);
+        f.draw(&mut g, true);
+        assert!(g.find("stopwatch countdown").is_some());
+        press(&mut f, KeyCode::Char('l'));
+        press(&mut f, KeyCode::Tab);
+        typed(&mut f, "abcdef");
+        press(&mut f, KeyCode::Enter);
+        let mut g = Grid::new(32, 10);
+        f.draw(&mut g, true);
+        assert!(g.find("…").is_some());
+        assert_eq!(wrap("日本 語", 4), vec!["日本", "語"]);
     }
 }

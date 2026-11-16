@@ -117,7 +117,7 @@ impl App {
             return true;
         }
         if self.shown().len() >= MAX_SHOWN {
-            self.note("Four clocks are on display; take one off with v first");
+            self.note("Four clocks are shown; hide one with v first");
             return false;
         }
         self.timers[i].shown = true;
@@ -213,7 +213,7 @@ impl App {
                     // Show where it went, rather than leave the display unchanged.
                     self.view = View::List;
                     self.quick = false;
-                    self.note("Four clocks are on display; this one waits in the list");
+                    self.note("Four clocks are shown; this one waits in the list");
                 }
             }
         }
@@ -393,8 +393,21 @@ impl App {
             }
             View::Display => self.compose_display(&mut grid),
         }
+        // The same size the list needs before it draws more than one line.
+        let bar = rows.checked_sub(1).filter(|_| rows >= 4 && cols >= 10);
         if let Some(form) = &self.form {
-            form.draw(&mut grid, self.color);
+            // A window shrunk under the dialog keeps the list clear, and the
+            // form's keys still say how to close it.
+            if Form::fits(cols, rows) {
+                grid.dim_all();
+                form.draw(&mut grid, self.color);
+            }
+            if let Some(y) = bar {
+                manager::toolbar(&mut grid, y, &form.keys(), self.color);
+            }
+        } else if let (View::List, Some(y)) = (self.view, bar) {
+            let keys = manager::keys(self.timers.get(self.sel));
+            manager::toolbar(&mut grid, y, &keys, self.color);
         }
         grid
     }
@@ -474,7 +487,9 @@ mod tests {
         let mut a = app(0);
         press(&mut a, KeyCode::Char('a'));
         typed(&mut a, "Tea");
+        // A new clock starts as a stopwatch; switch it to a countdown.
         press(&mut a, KeyCode::Tab);
+        press(&mut a, KeyCode::Char('l'));
         press(&mut a, KeyCode::Tab);
         typed(&mut a, "4m");
         press(&mut a, KeyCode::Enter);
@@ -670,8 +685,6 @@ mod tests {
     fn a_fifth_clock_from_the_display_goes_to_the_list() {
         let mut a = app(4);
         press(&mut a, KeyCode::Char('a'));
-        press(&mut a, KeyCode::Tab);
-        press(&mut a, KeyCode::Char('l'));
         press(&mut a, KeyCode::Enter);
         assert_eq!(a.timers.len(), 5);
         assert_eq!(a.view, View::List);
@@ -696,8 +709,6 @@ mod tests {
         let mut a = app(1);
         press(&mut a, KeyCode::Char('a'));
         typed(&mut a, "Run");
-        press(&mut a, KeyCode::Tab);
-        press(&mut a, KeyCode::Char('l'));
         press(&mut a, KeyCode::Enter);
         assert_eq!(a.view, View::Display);
         assert_eq!(a.shown(), vec![0, 1]);

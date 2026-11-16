@@ -40,10 +40,10 @@ def xterm256(n):
 
 
 def parse(text):
-    """Turns the dump into rows of (char, fg, bg, bold)."""
+    """Turns the dump into rows of (char, fg, bg, bold, dim, underline)."""
     rows = []
     # tmux only writes a code when the style changes, so it carries over lines.
-    fg, bg, bold, rev = None, None, False, False
+    fg, bg, bold, rev, dim, ul = None, None, False, False, False, False
     for raw in text.split("\n"):
         cells = []
         pos = 0
@@ -51,7 +51,7 @@ def parse(text):
             end = m.start() if m else len(raw)
             for ch in raw[pos:end]:
                 f, b = (bg or BG, fg or FG) if rev else (fg, bg)
-                cells.append((ch, f, b, bold))
+                cells.append((ch, f, b, bold, dim, ul))
             if not m:
                 break
             pos = m.end()
@@ -60,11 +60,17 @@ def parse(text):
             while i < len(codes):
                 c = codes[i]
                 if c == 0:
-                    fg, bg, bold, rev = None, None, False, False
+                    fg, bg, bold, rev, dim, ul = None, None, False, False, False, False
                 elif c == 1:
                     bold = True
+                elif c == 2:
+                    dim = True
                 elif c == 22:
-                    bold = False
+                    bold = dim = False
+                elif c == 4:
+                    ul = True
+                elif c == 24:
+                    ul = False
                 elif c == 7:
                     rev = True
                 elif c == 27:
@@ -99,6 +105,17 @@ def parse(text):
     return rows
 
 
+# Which way each box-drawing character reaches from the middle of its cell.
+BOX = {
+    "─": [(-1, 0), (1, 0)],
+    "│": [(0, -1), (0, 1)],
+    "╭": [(1, 0), (0, 1)],
+    "╮": [(-1, 0), (0, 1)],
+    "╰": [(1, 0), (0, -1)],
+    "╯": [(-1, 0), (0, -1)],
+}
+
+
 def font_path(bold=False):
     pattern = "monospace:bold" if bold else "monospace"
     return subprocess.run(
@@ -125,12 +142,24 @@ def render(text, cols, rows):
 
     # Paint the whole screen background first when the capture fills it.
     for y, cells in enumerate(grid):
-        for x, (c, fg, bg, b) in enumerate(cells[:cols]):
+        for x, (c, fg, bg, b, dim, ul) in enumerate(cells[:cols]):
             px, py = PAD + x * cw, PAD + BAR + y * ch
             if bg:
                 d.rectangle([px, py, px + cw - 1, py + ch - 1], fill=bg)
             colour = fg or FG
-            if c == "█":
+            if dim:
+                # Faint text the way most terminals draw it: halfway to the background.
+                under = bg or BG
+                colour = tuple((a + u) // 2 for a, u in zip(colour, under))
+            if ul:
+                d.line([px, py + ch - 1, px + cw - 1, py + ch - 1], fill=colour, width=1)
+            if c in BOX:
+                # Box lines drawn as lines, so they join the way a terminal's do.
+                mx, my = px + cw // 2, py + ch // 2
+                for dx, dy in BOX[c]:
+                    end = (px + cw - 1 if dx > 0 else px if dx < 0 else mx, py + ch - 1 if dy > 0 else py if dy < 0 else my)
+                    d.line([mx, my, end[0], end[1]], fill=colour, width=1)
+            elif c == "█":
                 # Draw full blocks as solid cells, the way terminals do.
                 d.rectangle([px, py, px + cw - 1, py + ch - 1], fill=colour)
             elif c.strip():

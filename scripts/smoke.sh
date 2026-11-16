@@ -130,7 +130,8 @@ check "no arguments opens the clock list" 'screen list | grep -q "No clocks"'
 t send-keys -t smoke:list a
 sleep 0.2
 t send-keys -t smoke:list -l Tea
-t send-keys -t smoke:list Tab Tab
+check "a new clock starts as a stopwatch" 'screen list | grep -q "› Name" && ! screen list | grep -q "Time"'
+t send-keys -t smoke:list Tab l Tab
 t send-keys -t smoke:list -l 2m
 t send-keys -t smoke:list Enter
 sleep 0.3
@@ -140,7 +141,7 @@ sleep 0.3
 check "enter shows it in big digits" '[[ $(screen list | grep -c "█") -ge 5 ]]'
 t send-keys -t smoke:list Escape
 sleep 0.3
-check "esc goes back to the list" 'screen list | grep -q "1 clock"'
+check "esc goes back to the list" 'screen list | grep -q "1 shown"'
 t send-keys -t smoke:list e
 sleep 0.2
 t send-keys -t smoke:list BSpace BSpace BSpace

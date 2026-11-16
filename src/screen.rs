@@ -23,6 +23,7 @@ pub struct Style {
     pub bold: bool,
     pub dim: bool,
     pub reverse: bool,
+    pub underline: bool,
 }
 
 impl Style {
@@ -91,6 +92,18 @@ impl Grid {
 
     pub fn cell(&self, x: usize, y: usize) -> Cell {
         self.cells[y * self.cols + x]
+    }
+
+    /// Fades everything drawn so far, so a dialog on top stands out.
+    pub fn dim_all(&mut self) {
+        for c in &mut self.cells {
+            // Without its colours too, so no bright bar shows through.
+            c.style = Style {
+                dim: true,
+                bold: c.style.bold,
+                ..Style::default()
+            };
+        }
     }
 
     /// Blanks `r` in `style`, clipped to the grid.
@@ -211,6 +224,9 @@ fn apply(out: &mut Out, s: Style) -> io::Result<()> {
     }
     if s.reverse {
         queue!(out, SetAttribute(Attribute::Reverse))?;
+    }
+    if s.underline {
+        queue!(out, SetAttribute(Attribute::Underlined))?;
     }
     Ok(())
 }
