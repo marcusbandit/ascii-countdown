@@ -159,13 +159,8 @@ pub fn compose(grid: &mut Grid, panels: &[Panel], color: bool, selected: Option<
         draw_panel(grid, p, r, scale, color, multi);
     }
     if let Some(i) = selected.filter(|_| multi) {
-        let style = if color {
-            Style::fg(Ink::Cyan).bold()
-        } else {
-            Style::default().bold()
-        };
         if let Some(&r) = rects.get(i) {
-            grid.frame(r, style);
+            grid.frame(r, Style::accent(color));
         }
     }
     per_row

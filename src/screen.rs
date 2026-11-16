@@ -36,6 +36,22 @@ impl Style {
     pub fn bold(self) -> Style {
         Style { bold: true, ..self }
     }
+
+    pub fn reversed(self) -> Style {
+        Style {
+            reverse: true,
+            ..self
+        }
+    }
+
+    /// The one highlight colour: titles, the selection frame, focused fields.
+    pub fn accent(color: bool) -> Style {
+        if color {
+            Style::fg(Color::Cyan).bold()
+        } else {
+            Style::default().bold()
+        }
+    }
 }
 
 /// `'\0'` marks the right half of a wide character drawn in the cell before.

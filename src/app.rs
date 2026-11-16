@@ -56,6 +56,11 @@ pub struct App {
     color: bool,
     bells_waiting: u32,
     next_bell: Instant,
+    /// Started with clocks on the command line and never sent to the list:
+    /// once every countdown is done, a stray key quits, as `tock 25m` always has.
+    quick: bool,
+    /// The screen size of the last frame, to know whether the form fits.
+    size: (usize, usize),
 }
 
 impl App {
@@ -85,6 +90,8 @@ impl App {
             color,
             bells_waiting: 0,
             next_bell: Instant::now(),
+            quick: view == View::Display,
+            size: (80, 24),
         }
     }
 
@@ -101,6 +108,28 @@ impl App {
 
     fn note(&mut self, text: &str) {
         self.note = Some((text.to_string(), Instant::now()));
+    }
+
+    /// Puts clock `i` on display if there is room. When there is not, says so
+    /// on the list and returns false.
+    fn try_show(&mut self, i: usize) -> bool {
+        if self.timers[i].shown {
+            return true;
+        }
+        if self.shown().len() >= MAX_SHOWN {
+            self.note("Four clocks are on display; take one off with v first");
+            return false;
+        }
+        self.timers[i].shown = true;
+        true
+    }
+
+    fn open_form(&mut self, form: Form) {
+        if Form::fits(self.size.0, self.size.1) {
+            self.form = Some(form);
+        } else {
+            self.note("The window is too small for the form");
+        }
     }
 
     /// Advances the clocks. Returns true when the bell should ring now.
@@ -153,6 +182,14 @@ impl App {
             }
             return None;
         }
+        // Chords such as Ctrl+X or Alt+R are never a tock key, so a stray one
+        // from a terminal multiplexer cannot cancel a clock.
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return None;
+        }
         match self.view {
             View::List => self.list_key(key),
             View::Display => self.display_key(key),
@@ -172,7 +209,10 @@ impl App {
                 let shown = self.shown().len() < MAX_SHOWN;
                 self.timers.push(Timer::new(spec, shown));
                 self.sel = self.timers.len() - 1;
-                if !shown && self.view == View::List {
+                if !shown {
+                    // Show where it went, rather than leave the display unchanged.
+                    self.view = View::List;
+                    self.quick = false;
                     self.note("Four clocks are on display; this one waits in the list");
                 }
             }
@@ -182,10 +222,11 @@ impl App {
     /// Keys both views share. Returns true when the key was one of them.
     fn common_key(&mut self, code: KeyCode) -> bool {
         match code {
-            KeyCode::Char('a') => self.form = Some(Form::new_clock()),
+            KeyCode::Char('a') => self.open_form(Form::new_clock()),
             KeyCode::Char('e') => {
                 if let Some(t) = self.timers.get(self.sel) {
-                    self.form = Some(Form::edit(self.sel, t));
+                    let form = Form::edit(self.sel, t);
+                    self.open_form(form);
                 }
             }
             KeyCode::Char(' ' | 'p') => {
@@ -244,31 +285,20 @@ impl App {
         }
         let last = self.timers.len().saturating_sub(1);
         match key.code {
-            KeyCode::Char('q') => return Some(Exit::Quit),
+            KeyCode::Char('q' | 'Q') => return Some(Exit::Quit),
             KeyCode::Up | KeyCode::Char('k') => self.sel = self.sel.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => self.sel = (self.sel + 1).min(last),
             KeyCode::Home | KeyCode::Char('g') => self.sel = 0,
             KeyCode::End | KeyCode::Char('G') => self.sel = last,
-            KeyCode::Char('v') => {
-                if let Some(t) = self.timers.get(self.sel) {
-                    if t.shown {
-                        self.timers[self.sel].shown = false;
-                    } else if self.shown().len() < MAX_SHOWN {
-                        self.timers[self.sel].shown = true;
-                    } else {
-                        self.note("Four clocks are on display; take one off with v first");
-                    }
+            KeyCode::Char('v') if self.sel < self.timers.len() => {
+                if self.timers[self.sel].shown {
+                    self.timers[self.sel].shown = false;
+                } else {
+                    self.try_show(self.sel);
                 }
             }
-            KeyCode::Enter => {
-                let t = self.timers.get(self.sel)?;
-                if !t.shown {
-                    if self.shown().len() >= MAX_SHOWN {
-                        self.note("Four clocks are on display; take one off with v first");
-                        return None;
-                    }
-                    self.timers[self.sel].shown = true;
-                }
+            // try_show notes why when there is no room.
+            KeyCode::Enter if self.sel < self.timers.len() && self.try_show(self.sel) => {
                 self.view = View::Display;
                 self.active_at = Some(Instant::now());
             }
@@ -279,36 +309,25 @@ impl App {
 
     fn display_key(&mut self, key: KeyEvent) -> Option<Exit> {
         self.active_at = Some(Instant::now());
-        let moved = match key.code {
+        match key.code {
             KeyCode::Left | KeyCode::Char('h') => self.step(-1),
             KeyCode::Right | KeyCode::Char('l') => self.step(1),
             KeyCode::Up | KeyCode::Char('k') => self.step_row(-1),
             KeyCode::Down | KeyCode::Char('j') => self.step_row(1),
-            _ => false,
-        };
-        if moved
-            || matches!(
-                key.code,
-                KeyCode::Left
-                    | KeyCode::Right
-                    | KeyCode::Up
-                    | KeyCode::Down
-                    | KeyCode::Char('h' | 'j' | 'k' | 'l')
-            )
-        {
-            return None;
-        }
-        match key.code {
             KeyCode::Esc => {
                 self.view = View::List;
-                return None;
+                self.quick = false;
             }
-            KeyCode::Char('q') => return Some(Exit::Quit),
-            _ => {}
+            KeyCode::Char('q' | 'Q') => return Some(Exit::Quit),
+            _ => return self.display_action(key),
         }
-        // Once every countdown is done, the keys that still mean something
-        // keep working and any other key quits, as `tock 25m` always has.
-        if self.all_done() {
+        None
+    }
+
+    fn display_action(&mut self, key: KeyEvent) -> Option<Exit> {
+        // Started as `tock 25m` and every countdown is done: the keys that
+        // still mean something keep working and any other key quits.
+        if self.quick && self.all_done() {
             let keeps = matches!(
                 key.code,
                 KeyCode::Char('r' | 'R' | 'e' | 'x' | 'a') | KeyCode::Delete | KeyCode::Enter
@@ -326,20 +345,18 @@ impl App {
     }
 
     /// Moves along the clocks on display, in order.
-    fn step(&mut self, by: isize) -> bool {
+    fn step(&mut self, by: isize) {
         let shown = self.shown();
-        let Some(pos) = shown.iter().position(|&i| i == self.sel) else {
-            return false;
-        };
-        let to = (pos as isize + by).clamp(0, shown.len() as isize - 1) as usize;
-        self.sel = shown[to];
-        to != pos
+        if let Some(pos) = shown.iter().position(|&i| i == self.sel) {
+            let to = (pos as isize + by).clamp(0, shown.len() as isize - 1) as usize;
+            self.sel = shown[to];
+        }
     }
 
     /// Moves a row up or down in the layout the display drew last.
-    fn step_row(&mut self, by: isize) -> bool {
+    fn step_row(&mut self, by: isize) {
         let Some(pos) = self.window.iter().position(|&i| i == self.sel) else {
-            return false;
+            return;
         };
         let per_row = self.per_row.max(1);
         let n = self.window.len();
@@ -350,14 +367,14 @@ impl App {
             // Down into a short last row: land on its last clock.
             n - 1
         } else {
-            return false;
+            return;
         };
         self.sel = self.window[to];
-        true
     }
 
     /// Lays out the current view on a `cols` x `rows` screen.
     pub fn compose(&mut self, cols: usize, rows: usize) -> Grid {
+        self.size = (cols, rows);
         let mut grid = Grid::new(cols, rows);
         if self.view == View::Display && self.shown().is_empty() {
             self.view = View::List;
@@ -616,6 +633,14 @@ mod tests {
         assert!(a.all_done());
         assert_eq!(press(&mut a, KeyCode::Char('z')), None, "grace period");
         a.timers[0].done_at = Some(Instant::now() - DONE_GRACE);
+        a.quick = false;
+        assert_eq!(
+            press(&mut a, KeyCode::Char(' ')),
+            None,
+            "a list session never quits on a stray key"
+        );
+        a.quick = true;
+        a.timers[0].done_at = Some(Instant::now() - DONE_GRACE);
         assert_eq!(press(&mut a, KeyCode::Char('r')), None);
         assert!(!a.timers[0].is_done(), "r starts it over");
     }
@@ -631,6 +656,39 @@ mod tests {
             a.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(Exit::Interrupt)
         );
+    }
+
+    #[test]
+    fn chords_do_nothing() {
+        let mut a = app(2);
+        a.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        a.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+        assert_eq!(a.timers.len(), 2);
+    }
+
+    #[test]
+    fn a_fifth_clock_from_the_display_goes_to_the_list() {
+        let mut a = app(4);
+        press(&mut a, KeyCode::Char('a'));
+        press(&mut a, KeyCode::Tab);
+        press(&mut a, KeyCode::Char('l'));
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.timers.len(), 5);
+        assert_eq!(a.view, View::List);
+        assert_eq!(a.sel, 4);
+        assert!(a.note.is_some());
+    }
+
+    #[test]
+    fn the_form_waits_for_room() {
+        let mut a = app(0);
+        a.compose(20, 6);
+        press(&mut a, KeyCode::Char('a'));
+        assert!(a.form.is_none());
+        assert!(a.note.is_some());
+        a.compose(80, 24);
+        press(&mut a, KeyCode::Char('a'));
+        assert!(a.form.is_some());
     }
 
     #[test]

@@ -41,11 +41,7 @@ pub fn compose(
         }
         return top;
     }
-    let accent = if color {
-        Style::fg(Ink::Cyan).bold()
-    } else {
-        Style::default().bold()
-    };
+    let accent = Style::accent(color);
     let dim = Style {
         dim: true,
         ..Style::default()
@@ -169,11 +165,7 @@ pub fn compose(
 
 /// Key chips in a row: the key reversed, then what it does.
 pub fn toolbar(grid: &mut Grid, y: usize, keys: &[(&str, &str)]) {
-    let key_style = Style {
-        reverse: true,
-        bold: true,
-        ..Style::default()
-    };
+    let key_style = Style::default().bold().reversed();
     let mut x = 2;
     for (k, what) in keys {
         let chip = format!(" {k} ");

@@ -47,7 +47,7 @@ tock 1h30m            # or 90s, 1h2m3s, 45 (seconds)
 tock 10:00            # mm:ss, or h:mm:ss as in 1:30:00
 tock -t "Tea" 4m      # with a title above the clock
 tock stopwatch        # count up from zero, same as tock --up
-tock -t Tea 4m -t Pasta 10m stopwatch   # several clocks; each -t names the next
+tock -t Tea 4m -t Pasta 10m stopwatch   # up to four; each -t names the next
 ```
 
 On the list:

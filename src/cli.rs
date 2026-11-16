@@ -59,6 +59,9 @@ pub enum Cli {
     Version,
 }
 
+/// The command line starts at most this many, all on the display at once.
+pub const MAX_CLOCKS: usize = crate::app::MAX_SHOWN;
+
 pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     let mut args = args.into_iter();
     let mut clocks: Vec<ClockSpec> = Vec::new();
@@ -132,6 +135,12 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String
                 ))
             }
         }
+    }
+    if clocks.len() > MAX_CLOCKS {
+        return Err(format!(
+            "{} clocks, but {MAX_CLOCKS} fit on the display; run tock on its own to keep more in a list",
+            clocks.len()
+        ));
     }
     Ok(Cli::Run(Options { clocks, bell }))
 }
@@ -222,7 +231,8 @@ mod tests {
                 (Mode::Stopwatch, None),
             ]
         );
-        assert_eq!(run_opts(&["1m"; 12]).clocks.len(), 12);
+        assert_eq!(run_opts(&["1m"; 4]).clocks.len(), 4);
+        assert!(cli(&["1m"; 5]).is_err());
     }
 
     #[test]

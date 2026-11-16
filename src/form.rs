@@ -1,7 +1,6 @@
 //! The add and edit dialog: a name, countdown or stopwatch, and a time.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use unicode_width::UnicodeWidthStr;
 
 use crate::duration;
 use crate::screen::{truncate, Grid, Ink, Rect, Style};
@@ -9,6 +8,9 @@ use crate::timer::{Mode, Timer};
 
 /// Longest name the form takes, in characters.
 const NAME_MAX: usize = 40;
+/// The dialog's size: its rows, and the fewest columns it still works in.
+const HEIGHT: usize = 8;
+const MIN_W: usize = 30;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -152,24 +154,25 @@ impl Form {
         }
     }
 
+    /// True when a `cols` x `rows` screen has room for the whole dialog.
+    pub fn fits(cols: usize, rows: usize) -> bool {
+        cols >= MIN_W && rows >= HEIGHT
+    }
+
     /// Draws the dialog centered on `grid`.
     pub fn draw(&self, grid: &mut Grid, color: bool) {
-        let w = 50.min(grid.cols);
-        let h = 9.min(grid.rows);
-        if w < 20 || h < 6 {
+        if !Form::fits(grid.cols, grid.rows) {
             return;
         }
+        let w = 50.min(grid.cols);
+        let h = HEIGHT;
         let r = Rect {
             x: (grid.cols - w) / 2,
             y: (grid.rows - h) / 2,
             w,
             h,
         };
-        let accent = if color {
-            Style::fg(Ink::Cyan).bold()
-        } else {
-            Style::default().bold()
-        };
+        let accent = Style::accent(color);
         grid.fill(r, Style::default());
         grid.frame(r, accent);
         let heading = if self.target.is_some() {
@@ -242,30 +245,6 @@ impl Form {
                 Style::default().bold()
             };
             grid.put(x, y + 3, &truncate(e, end - x), style, end);
-        }
-
-        let keys = [("enter", "save"), ("esc", "cancel"), ("tab", "next")];
-        let mut kx = x;
-        for (k, what) in keys {
-            let k = format!(" {k} ");
-            if kx + k.width() + what.width() + 1 > end {
-                break;
-            }
-            kx = grid.put(kx, r.y + h - 2, &k, Style::default().bold().reversed(), end);
-            kx = grid.put(kx + 1, r.y + h - 2, what, Style::default(), end) + 2;
-        }
-    }
-}
-
-trait Reversed {
-    fn reversed(self) -> Self;
-}
-
-impl Reversed for Style {
-    fn reversed(self) -> Style {
-        Style {
-            reverse: true,
-            ..self
         }
     }
 }
@@ -360,7 +339,8 @@ mod tests {
         assert!(g.find("Tea").is_some());
         assert!(g.find("countdown").is_some());
         // A screen too small for it is left alone rather than overrun.
-        let mut tiny = Grid::new(10, 3);
+        assert!(!Form::fits(19, 10));
+        let mut tiny = Grid::new(19, 10);
         f.draw(&mut tiny, true);
         assert!(tiny.find("New").is_none());
     }
