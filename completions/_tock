@@ -1,9 +1,7 @@
 #compdef tock
 # zsh completion for tock. Install as _tock in a directory on $fpath.
 
-_tock_target() {
-  # Nothing to offer once stopwatch mode is on: it takes no duration.
-  (( ${words[(I)(-u|--up)]} )) && return 1
+_tock_clock() {
   local -a modes durations
   modes=('stopwatch:count up from zero instead of down')
   durations=(
@@ -21,10 +19,11 @@ _tock_target() {
   _describe -t durations 'duration (25m, 1h30m, 90s, 10:00)' durations
 }
 
+# -t and -u may come before every clock, so neither excludes itself.
 _arguments -s -S \
-  '(-t --title)'{-t+,--title=}'[show a label above the clock]:title: ' \
-  '(-u --up 1)'{-u,--up}'[stopwatch mode, count up instead of down]' \
+  '*'{-t+,--title=}'[label the clock that follows]:title: ' \
+  '*'{-u,--up}'[add a stopwatch]' \
   '--no-bell[flash at zero without ringing the terminal bell]' \
   '(- *)'{-h,--help}'[print help]' \
   '(- *)'{-V,--version}'[print the version]' \
-  '1:duration or stopwatch:_tock_target'
+  '*:duration or stopwatch:_tock_clock'

@@ -33,26 +33,6 @@ pub fn pixel_width(text: &str) -> usize {
     glyphs + GAP * text.chars().count().saturating_sub(1)
 }
 
-/// Picks the largest scale at which `text` fits in `cols` x `rows` cells.
-///
-/// Returns columns and rows per font pixel. Terminal cells are about twice as
-/// tall as they are wide, so a pixel two columns wide and one row tall is
-/// square. When even that does not fit, a squashed one-by-one pixel is tried.
-pub fn fit(text: &str, cols: usize, rows: usize) -> Option<(usize, usize)> {
-    let width = pixel_width(text);
-    if width == 0 {
-        return None;
-    }
-    let sy = (rows / ROWS).min(cols / (2 * width));
-    if sy >= 1 {
-        Some((2 * sy, sy))
-    } else if width <= cols && ROWS <= rows {
-        Some((1, 1))
-    } else {
-        None
-    }
-}
-
 /// Renders `text` with each font pixel `sx` columns wide and `sy` rows tall.
 pub fn render(text: &str, sx: usize, sy: usize) -> Vec<String> {
     let mut lines = Vec::with_capacity(ROWS * sy);
@@ -92,24 +72,6 @@ mod tests {
             let g = glyph(c);
             assert!(g.iter().all(|r| r.len() == g[0].len()), "{c} is ragged");
         }
-    }
-
-    #[test]
-    fn fit_keeps_pixels_square_and_inside() {
-        let (sx, sy) = fit("25:00", 200, 60).unwrap();
-        assert_eq!(sx, 2 * sy);
-        assert!(17 * sx <= 200 && 5 * sy <= 60);
-        // Wider by one pixel would not fit any more.
-        let bigger = sy + 1;
-        assert!(17 * 2 * bigger > 200 || 5 * bigger > 60);
-    }
-
-    #[test]
-    fn fit_falls_back_then_gives_up() {
-        assert_eq!(fit("25:00", 34, 5), Some((2, 1)));
-        assert_eq!(fit("25:00", 20, 5), Some((1, 1)));
-        assert_eq!(fit("25:00", 16, 5), None);
-        assert_eq!(fit("25:00", 80, 4), None);
     }
 
     #[test]

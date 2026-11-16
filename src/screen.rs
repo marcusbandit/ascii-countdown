@@ -1,4 +1,8 @@
-//! Owns the terminal while the clock runs and puts it back afterwards.
+//! Owns the terminal while the clocks run and puts it back afterwards.
+//!
+//! A frame is composed into a grid of cells first, one panel per clock, and
+//! then written out row by row. Every cell is written on every draw, so
+//! nothing from the last frame survives and no clear is needed between frames.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -19,9 +23,9 @@ pub enum Tone {
     Warn,
 }
 
-/// One frame's worth of state. Two equal views draw the same frame.
+/// One clock's worth of state. Two equal panels draw the same pixels.
 #[derive(Clone, Debug, PartialEq)]
-pub struct View {
+pub struct Panel {
     pub title: Option<String>,
     pub face: String,
     pub tone: Tone,
@@ -30,83 +34,245 @@ pub struct View {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Part {
-    Blank,
+enum Part {
     Title,
     Face,
     Status,
 }
 
-/// One terminal row: the column the text starts at, what it is, and the text.
-#[derive(Debug, PartialEq)]
-pub struct Line {
-    pub left: usize,
-    pub part: Part,
-    pub text: String,
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Style {
+    fg: Option<Color>,
+    bg: Option<Color>,
+    bold: bool,
+    dim: bool,
+    reverse: bool,
+}
+
+/// `'\0'` marks the right half of a wide character drawn in the cell before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Cell {
+    ch: char,
+    style: Style,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rect {
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+}
+
+pub struct Grid {
+    cols: usize,
+    cells: Vec<Cell>,
+}
+
+impl Grid {
+    fn new(cols: usize, rows: usize) -> Grid {
+        let blank = Cell {
+            ch: ' ',
+            style: Style::default(),
+        };
+        Grid {
+            cols,
+            cells: vec![blank; cols * rows],
+        }
+    }
+
+    fn cell(&self, x: usize, y: usize) -> Cell {
+        self.cells[y * self.cols + x]
+    }
+
+    fn fill(&mut self, r: Rect, style: Style) {
+        for y in r.y..r.y + r.h {
+            for x in r.x..r.x + r.w {
+                self.cells[y * self.cols + x] = Cell { ch: ' ', style };
+            }
+        }
+    }
+
+    /// Writes `text` from column `x`, stopping before column `end`.
+    fn put(&mut self, x: usize, y: usize, text: &str, style: Style, end: usize) {
+        let mut x = x;
+        for ch in text.chars() {
+            let w = ch.width().unwrap_or(0);
+            if w == 0 {
+                continue;
+            }
+            if x + w > end {
+                break;
+            }
+            self.cells[y * self.cols + x] = Cell { ch, style };
+            if w == 2 {
+                self.cells[y * self.cols + x + 1] = Cell { ch: '\0', style };
+            }
+            x += w;
+        }
+    }
+
+    /// The characters of row `y`, for tests.
+    #[cfg(test)]
+    fn row_text(&self, y: usize) -> String {
+        (0..self.cols)
+            .map(|x| self.cell(x, y).ch)
+            .filter(|&c| c != '\0')
+            .collect()
+    }
 }
 
 /// Rows kept free above and below the digits for the title and the status.
 const BAND: usize = 2;
-/// Columns kept free on each side once the terminal is wide enough to spare them.
-const SIDE: usize = 2;
 
-/// Lays out a view on a `cols` x `rows` terminal, one `Line` per row.
-pub fn layout(view: &View, cols: usize, rows: usize) -> Vec<Line> {
-    let side = if cols >= 40 { SIDE } else { 0 };
-    let inner = cols - 2 * side;
-
-    let mut block: Vec<(Part, String)> = Vec::new();
-    let title = view.title.as_deref().map(|t| truncate(t, cols));
-    let status = truncate(view.status, cols);
-
-    if let Some((sx, sy)) = font::fit(&view.face, inner, rows.saturating_sub(2 * BAND)) {
-        // Title and status each get a band, and both bands are always there so
-        // the digits stay put when a status appears or a title is missing.
-        block.push((Part::Title, title.unwrap_or_default()));
-        block.push((Part::Blank, String::new()));
-        block.extend(
-            font::render(&view.face, sx, sy)
-                .into_iter()
-                .map(|l| (Part::Face, l)),
-        );
-        block.push((Part::Blank, String::new()));
-        block.push((Part::Status, status));
-    } else if let Some((sx, sy)) = font::fit(&view.face, inner, rows) {
-        block.extend(
-            font::render(&view.face, sx, sy)
-                .into_iter()
-                .map(|l| (Part::Face, l)),
-        );
-    } else {
-        // Too small for big digits: plain text, as much of it as fits.
-        // The time comes first, then the status, then the title.
-        if let Some(t) = title.filter(|t| !t.is_empty() && rows >= 3) {
-            block.push((Part::Title, t));
-        }
-        block.push((Part::Face, truncate(&view.face, cols)));
-        if !status.is_empty() && rows > block.len() {
-            block.push((Part::Status, status));
-        }
-        block.truncate(rows);
+/// Columns kept free on each side of a panel, when it is wide enough to spare
+/// them. Panels next to each other always keep one, so their digits never touch.
+fn side(w: usize, multi: bool) -> usize {
+    match (w, multi) {
+        (40.., _) => 2,
+        (_, true) => 1,
+        _ => 0,
     }
+}
 
-    let top = (rows - block.len()) / 2;
-    let mut lines: Vec<Line> = (0..rows)
-        .map(|_| Line {
-            left: 0,
-            part: Part::Blank,
-            text: String::new(),
+/// A size for the digits: columns and rows per font pixel, and whether the
+/// title and status bands fit too.
+type Scale = (usize, usize, bool);
+
+/// Every scale worth trying for a terminal `rows` tall, best first. Square
+/// pixels with room for the title beat everything; a squashed one-by-one pixel
+/// is the last resort before dropping the title, and then before plain text.
+fn scales(rows: usize) -> Vec<Scale> {
+    let mut v = Vec::new();
+    for bands in [true, false] {
+        for s in (1..=rows / font::ROWS).rev() {
+            v.push((2 * s, s, bands));
+        }
+        v.push((1, 1, bands));
+    }
+    v
+}
+
+fn fits(face: &str, r: Rect, (sx, sy, bands): Scale, multi: bool) -> bool {
+    let band_rows = if bands { 2 * BAND } else { 0 };
+    let inner = r.w.saturating_sub(2 * side(r.w, multi));
+    font::pixel_width(face) * sx <= inner && font::ROWS * sy + band_rows <= r.h
+}
+
+/// Splits the screen into `n` panels, `per_row` to a row. A short last row
+/// is centered.
+fn panel_rects(n: usize, per_row: usize, cols: usize, rows: usize) -> Vec<Rect> {
+    let grid_rows = n.div_ceil(per_row);
+    let w = cols / per_row;
+    (0..n)
+        .map(|i| {
+            let (row, col) = (i / per_row, i % per_row);
+            let in_row = per_row.min(n - row * per_row);
+            let y = row * rows / grid_rows;
+            Rect {
+                x: (cols - in_row * w) / 2 + col * w,
+                y,
+                w,
+                h: (row + 1) * rows / grid_rows - y,
+            }
         })
-        .collect();
-    for (i, (part, text)) in block.into_iter().enumerate() {
-        let width = text.width();
-        lines[top + i] = Line {
-            left: (cols - width) / 2,
-            part,
-            text,
-        };
+        .collect()
+}
+
+/// Picks how many panels go in a row and one scale shared by all of them, so
+/// the digits are as big as they can be while every clock fits. `None` means
+/// the screen is too small for big digits at all.
+fn plan(panels: &[Panel], cols: usize, rows: usize) -> (Vec<Rect>, Option<Scale>) {
+    let n = panels.len();
+    let options = scales(rows);
+    let mut best: Option<(usize, usize)> = None;
+    for per_row in 1..=n {
+        let rects = panel_rects(n, per_row, cols, rows);
+        let fit = options.iter().position(|&s| {
+            panels
+                .iter()
+                .zip(&rects)
+                .all(|(p, &r)| fits(&p.face, r, s, n > 1))
+        });
+        // On a tie the layout with more panels to a row wins: side by side
+        // suits a wide terminal.
+        if let Some(rank) = fit {
+            if best.is_none_or(|(b, _)| rank <= b) {
+                best = Some((rank, per_row));
+            }
+        }
     }
-    lines
+    match best {
+        Some((rank, per_row)) => (panel_rects(n, per_row, cols, rows), Some(options[rank])),
+        None => {
+            // Plain text needs up to three rows a panel.
+            let per_row = (1..=n).find(|&c| n.div_ceil(c) * 3 <= rows).unwrap_or(n);
+            (panel_rects(n, per_row, cols, rows), None)
+        }
+    }
+}
+
+/// Lays out every panel on a `cols` x `rows` grid.
+pub fn compose(panels: &[Panel], cols: usize, rows: usize, color: bool) -> Grid {
+    let mut grid = Grid::new(cols, rows);
+    if panels.is_empty() || cols == 0 || rows == 0 {
+        return grid;
+    }
+    let (rects, scale) = plan(panels, cols, rows);
+    for (p, r) in panels.iter().zip(rects) {
+        draw_panel(&mut grid, p, r, scale, color);
+    }
+    grid
+}
+
+fn draw_panel(grid: &mut Grid, p: &Panel, r: Rect, scale: Option<Scale>, color: bool) {
+    grid.fill(r, base_style(p, color));
+    if r.w == 0 || r.h == 0 {
+        return;
+    }
+    let title = p
+        .title
+        .as_deref()
+        .map(|t| truncate(t, r.w))
+        .unwrap_or_default();
+    let status = truncate(p.status, r.w);
+
+    let mut block: Vec<Option<(Part, String)>> = Vec::new();
+    match scale {
+        Some((sx, sy, bands)) => {
+            let face = font::render(&p.face, sx, sy).into_iter();
+            // Both bands are always there, so the digits stay put when a
+            // status appears or a title is missing.
+            if bands {
+                block.push(Some((Part::Title, title)));
+                block.push(None);
+            }
+            block.extend(face.map(|l| Some((Part::Face, l))));
+            if bands {
+                block.push(None);
+                block.push(Some((Part::Status, status)));
+            }
+        }
+        None => {
+            // Too small for big digits: plain text, the time first.
+            if !title.is_empty() && r.h >= 3 {
+                block.push(Some((Part::Title, title)));
+            }
+            block.push(Some((Part::Face, truncate(&p.face, r.w))));
+            if !status.is_empty() && r.h > block.len() {
+                block.push(Some((Part::Status, status)));
+            }
+        }
+    }
+    block.truncate(r.h);
+
+    let top = r.y + (r.h - block.len()) / 2;
+    for (i, line) in block.into_iter().enumerate() {
+        if let Some((part, text)) = line {
+            let x = r.x + (r.w - text.width().min(r.w)) / 2;
+            grid.put(x, top + i, &text, part_style(p, part, color), r.x + r.w);
+        }
+    }
 }
 
 /// Cuts `s` down to at most `cols` terminal columns.
@@ -120,13 +286,67 @@ fn truncate(s: &str, cols: usize) -> String {
         .collect()
 }
 
+/// The style of a whole panel: plain, or inverted while it flashes.
+fn base_style(p: &Panel, color: bool) -> Style {
+    match (p.flash, color) {
+        (false, _) => Style::default(),
+        (true, true) => Style {
+            fg: Some(Color::Black),
+            bg: Some(Color::Red),
+            ..Style::default()
+        },
+        (true, false) => Style {
+            reverse: true,
+            ..Style::default()
+        },
+    }
+}
+
+fn part_style(p: &Panel, part: Part, color: bool) -> Style {
+    let mut s = base_style(p, color);
+    if part != Part::Face {
+        s.bold = true;
+    }
+    if p.flash || part == Part::Title {
+        return s;
+    }
+    match (p.tone, color) {
+        (Tone::Normal, _) => {}
+        (Tone::Paused, true) => s.fg = Some(Color::DarkGrey),
+        (Tone::Warn, true) => s.fg = Some(Color::Red),
+        (Tone::Paused, false) => s.dim = true,
+        (Tone::Warn, false) => s.bold = true,
+    }
+    s
+}
+
 /// Where frames go: the controlling terminal, not stdout, so stdout stays free
-/// for the stopwatch's result even when it is redirected.
+/// for the stopwatch results even when it is redirected.
 type Out = BufWriter<File>;
 
 fn open_tty() -> io::Result<Out> {
     let tty = OpenOptions::new().write(true).open("/dev/tty")?;
     Ok(BufWriter::with_capacity(64 * 1024, tty))
+}
+
+fn apply(out: &mut Out, s: Style) -> io::Result<()> {
+    queue!(out, SetAttribute(Attribute::Reset))?;
+    if let Some(c) = s.fg {
+        queue!(out, SetForegroundColor(c))?;
+    }
+    if let Some(c) = s.bg {
+        queue!(out, SetBackgroundColor(c))?;
+    }
+    if s.bold {
+        queue!(out, SetAttribute(Attribute::Bold))?;
+    }
+    if s.dim {
+        queue!(out, SetAttribute(Attribute::Dim))?;
+    }
+    if s.reverse {
+        queue!(out, SetAttribute(Attribute::Reverse))?;
+    }
+    Ok(())
 }
 
 pub struct Screen {
@@ -165,28 +385,46 @@ impl Screen {
         execute!(self.out, Print('\x07'))
     }
 
-    /// Draws every row in full, so nothing from the last frame survives and no
-    /// clear is needed between frames.
-    pub fn draw(&mut self, view: &View, (cols, rows): (u16, u16)) -> io::Result<()> {
+    pub fn draw(&mut self, panels: &[Panel], (cols, rows): (u16, u16)) -> io::Result<()> {
         let (cols, rows) = (cols as usize, rows as usize);
         if cols == 0 || rows == 0 {
             return Ok(());
         }
+        let grid = compose(panels, cols, rows, self.color);
         let out = &mut self.out;
         queue!(out, terminal::BeginSynchronizedUpdate)?;
-        for (y, line) in layout(view, cols, rows).iter().enumerate() {
+        for y in 0..rows {
             queue!(out, cursor::MoveTo(0, y as u16))?;
-            base_style(out, view, self.color)?;
-            queue!(out, Print(" ".repeat(line.left)))?;
-            part_style(out, view, line.part, self.color)?;
-            queue!(out, Print(&line.text))?;
-            base_style(out, view, self.color)?;
             // Stop one short on the last row: writing its last cell can scroll
-            // some terminals. The erase fills that cell with the background.
+            // some terminals. The erase after fills that cell instead.
             let end = if y + 1 == rows { cols - 1 } else { cols };
-            let used = line.left + line.text.width();
-            queue!(out, Print(" ".repeat(end.saturating_sub(used))))?;
+            let mut style = None;
+            let mut run = String::new();
+            for x in 0..end {
+                let mut cell = grid.cell(x, y);
+                if cell.ch == '\0' {
+                    continue;
+                }
+                // A wide character would spill into the column held back above.
+                if x + cell.ch.width().unwrap_or(1) > end {
+                    cell.ch = ' ';
+                }
+                if style != Some(cell.style) {
+                    if let Some(s) = style {
+                        apply(out, s)?;
+                        queue!(out, Print(&run))?;
+                        run.clear();
+                    }
+                    style = Some(cell.style);
+                }
+                run.push(cell.ch);
+            }
+            if let Some(s) = style {
+                apply(out, s)?;
+                queue!(out, Print(&run))?;
+            }
             if y + 1 == rows {
+                apply(out, grid.cell(cols - 1, y).style)?;
                 queue!(out, terminal::Clear(ClearType::UntilNewLine))?;
             }
         }
@@ -196,39 +434,6 @@ impl Screen {
             terminal::EndSynchronizedUpdate
         )?;
         out.flush()
-    }
-}
-
-/// The style of the whole screen: plain, or inverted while flashing.
-fn base_style(out: &mut Out, view: &View, color: bool) -> io::Result<()> {
-    queue!(out, SetAttribute(Attribute::Reset))?;
-    match (view.flash, color) {
-        (false, _) => Ok(()),
-        (true, true) => queue!(
-            out,
-            SetBackgroundColor(Color::Red),
-            SetForegroundColor(Color::Black)
-        ),
-        (true, false) => queue!(out, SetAttribute(Attribute::Reverse)),
-    }
-}
-
-fn part_style(out: &mut Out, view: &View, part: Part, color: bool) -> io::Result<()> {
-    if part == Part::Title {
-        queue!(out, SetAttribute(Attribute::Bold))?;
-    }
-    if view.flash || !matches!(part, Part::Face | Part::Status) {
-        return Ok(());
-    }
-    if part == Part::Status {
-        queue!(out, SetAttribute(Attribute::Bold))?;
-    }
-    match (view.tone, color) {
-        (Tone::Normal, _) => Ok(()),
-        (Tone::Paused, true) => queue!(out, SetForegroundColor(Color::DarkGrey)),
-        (Tone::Warn, true) => queue!(out, SetForegroundColor(Color::Red)),
-        (Tone::Paused, false) => queue!(out, SetAttribute(Attribute::Dim)),
-        (Tone::Warn, false) => queue!(out, SetAttribute(Attribute::Bold)),
     }
 }
 
@@ -266,8 +471,8 @@ pub fn restore_on_panic() {
 mod tests {
     use super::*;
 
-    fn view(face: &str, title: Option<&str>) -> View {
-        View {
+    fn panel(face: &str, title: Option<&str>) -> Panel {
+        Panel {
             title: title.map(str::to_string),
             face: face.to_string(),
             tone: Tone::Normal,
@@ -276,73 +481,168 @@ mod tests {
         }
     }
 
-    fn face_rows(lines: &[Line]) -> Vec<usize> {
-        lines
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.part == Part::Face)
-            .map(|(i, _)| i)
+    /// Rows holding digit pixels, between columns `x0` and `x1`.
+    fn ink_rows(g: &Grid, x0: usize, x1: usize) -> Vec<usize> {
+        (0..g.cells.len() / g.cols)
+            .filter(|&y| (x0..x1).any(|x| g.cell(x, y).ch == '█'))
             .collect()
     }
 
-    #[test]
-    fn one_line_per_row_and_nothing_off_screen() {
-        for (cols, rows) in [(80, 24), (200, 60), (41, 9), (20, 5), (10, 3), (3, 1)] {
-            let lines = layout(
-                &view("25:00", Some("A long title for the timer")),
-                cols,
-                rows,
-            );
-            assert_eq!(lines.len(), rows);
-            for l in &lines {
-                assert!(l.left + l.text.width() <= cols, "{cols}x{rows}: {l:?}");
-            }
-        }
+    fn ink_cols(g: &Grid) -> Vec<usize> {
+        (0..g.cols)
+            .filter(|&x| (0..g.cells.len() / g.cols).any(|y| g.cell(x, y).ch == '█'))
+            .collect()
+    }
+
+    fn find(g: &Grid, text: &str) -> Option<(usize, usize)> {
+        (0..g.cells.len() / g.cols).find_map(|y| g.row_text(y).find(text).map(|x| (x, y)))
     }
 
     #[test]
-    fn digits_are_centered() {
-        let lines = layout(&view("25:00", None), 80, 24);
-        let rows = face_rows(&lines);
-        // 80 - 4 columns of margin fit a scale of 2: 10 rows of digits.
+    fn single_clock_is_centered_at_the_old_size() {
+        let g = compose(&[panel("25:00", None)], 80, 24, true);
+        let rows = ink_rows(&g, 0, 80);
+        // 76 usable columns fit a scale of 2: 10 rows of digits.
         assert_eq!(rows.len(), 10);
-        let above = rows[0];
-        let below = 24 - 1 - rows[rows.len() - 1];
+        let (above, below) = (rows[0], 24 - 1 - rows[rows.len() - 1]);
         assert!(above.abs_diff(below) <= 1);
-        let l = &lines[rows[0]];
-        assert!((80 - l.left - l.text.width()).abs_diff(l.left) <= 1);
+        let cols = ink_cols(&g);
+        let (left, right) = (cols[0], 80 - 1 - cols[cols.len() - 1]);
+        assert!(left.abs_diff(right) <= 1);
+    }
+
+    #[test]
+    fn a_single_clock_keeps_square_pixels_in_a_narrow_pane() {
+        // 17 font pixels two columns wide fill 34 columns exactly.
+        let g = compose(&[panel("25:00", None)], 34, 9, true);
+        let c = ink_cols(&g);
+        assert_eq!((c[0], c[c.len() - 1]), (0, 33));
     }
 
     #[test]
     fn title_sits_above_digits_and_status_below() {
-        let mut v = view("25:00", Some("Tea"));
-        v.status = "PAUSED";
-        let lines = layout(&v, 80, 24);
-        let rows = face_rows(&lines);
-        assert_eq!(lines[rows[0] - 2].text, "Tea");
-        assert_eq!(lines[rows[rows.len() - 1] + 2].text, "PAUSED");
+        let mut p = panel("25:00", Some("Tea"));
+        p.status = "PAUSED";
+        let g = compose(&[p], 80, 24, true);
+        let rows = ink_rows(&g, 0, 80);
+        assert_eq!(find(&g, "Tea").unwrap().1, rows[0] - 2);
+        assert_eq!(find(&g, "PAUSED").unwrap().1, rows[rows.len() - 1] + 2);
     }
 
     #[test]
     fn digits_do_not_move_when_status_changes() {
-        let mut v = view("25:00", None);
-        let before = face_rows(&layout(&v, 80, 24));
-        v.status = "PAUSED";
-        assert_eq!(face_rows(&layout(&v, 80, 24)), before);
+        let mut p = panel("25:00", None);
+        let before = ink_rows(&compose(&[p.clone()], 80, 24, true), 0, 80);
+        p.status = "PAUSED";
+        assert_eq!(ink_rows(&compose(&[p], 80, 24, true), 0, 80), before);
     }
 
     #[test]
     fn tiny_terminal_falls_back_to_plain_text() {
-        let lines = layout(&view("25:00", Some("Tea")), 12, 3);
-        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
-        assert!(texts.contains(&"25:00"), "{texts:?}");
-        assert_eq!(lines.iter().filter(|l| l.part == Part::Face).count(), 1);
+        let g = compose(&[panel("25:00", Some("Tea"))], 12, 3, true);
+        assert!(find(&g, "25:00").is_some());
+        assert!(ink_cols(&g).is_empty());
+        // Too small for anything: nothing panics and the time shows cut down.
+        let g = compose(&[panel("25:00", Some("Tea"))], 3, 1, true);
+        assert_eq!(g.row_text(0), "25:");
     }
 
     #[test]
-    fn truncates_by_display_width() {
-        assert_eq!(truncate("hello", 3), "hel");
+    fn two_clocks_sit_side_by_side_on_a_wide_screen() {
+        let panels = [
+            panel("04:00", Some("1  Tea")),
+            panel("10:00", Some("2  Pasta")),
+        ];
+        let g = compose(&panels, 100, 26, true);
+        let (tx, ty) = find(&g, "1  Tea").unwrap();
+        let (px, py) = find(&g, "2  Pasta").unwrap();
+        assert_eq!(ty, py);
+        assert!(tx < 50 && px >= 50);
+        // Each half holds its own digits, at the same rows.
+        assert_eq!(ink_rows(&g, 0, 50), ink_rows(&g, 50, 100));
+        assert!(!ink_rows(&g, 0, 50).is_empty());
+    }
+
+    #[test]
+    fn clocks_stack_on_a_tall_screen() {
+        let panels = [panel("04:00", Some("A")), panel("10:00", Some("B"))];
+        let g = compose(&panels, 40, 40, true);
+        let (_, ay) = find(&g, "A").unwrap();
+        let (_, by) = find(&g, "B").unwrap();
+        assert!(ay < 20 && by >= 20);
+    }
+
+    #[test]
+    fn a_short_last_row_is_centered() {
+        let r = panel_rects(3, 2, 100, 30);
+        assert_eq!(
+            r[0],
+            Rect {
+                x: 0,
+                y: 0,
+                w: 50,
+                h: 15
+            }
+        );
+        assert_eq!(
+            r[1],
+            Rect {
+                x: 50,
+                y: 0,
+                w: 50,
+                h: 15
+            }
+        );
+        assert_eq!(
+            r[2],
+            Rect {
+                x: 25,
+                y: 15,
+                w: 50,
+                h: 15
+            }
+        );
+    }
+
+    #[test]
+    fn panels_share_one_scale() {
+        // A stopwatch face is wider than a countdown; both get the same pixels.
+        let panels = [panel("04:00", None), panel("00:00.0", None)];
+        let g = compose(&panels, 120, 20, true);
+        let left = ink_rows(&g, 0, 60);
+        assert_eq!(left, ink_rows(&g, 60, 120));
+    }
+
+    #[test]
+    fn only_the_finished_panel_flashes() {
+        let mut done = panel("00:00", Some("1"));
+        done.flash = true;
+        let g = compose(&[done, panel("09:59", Some("2"))], 100, 26, true);
+        assert_eq!(g.cell(0, 0).style.bg, Some(Color::Red));
+        assert_eq!(g.cell(49, 25).style.bg, Some(Color::Red));
+        assert_eq!(g.cell(50, 0).style.bg, None);
+        assert_eq!(g.cell(99, 25).style.bg, None);
+    }
+
+    #[test]
+    fn nine_clocks_fit_somewhere() {
+        let panels: Vec<Panel> = (1..=9)
+            .map(|i| panel("25:00", Some(&i.to_string())))
+            .collect();
+        for (cols, rows) in [(200, 60), (100, 26), (40, 12), (10, 3)] {
+            let g = compose(&panels, cols, rows, true);
+            assert_eq!(g.cells.len(), cols * rows);
+        }
+        let g = compose(&panels, 200, 60, true);
+        assert!(!ink_cols(&g).is_empty());
+    }
+
+    #[test]
+    fn wide_characters_take_two_cells_and_never_spill() {
+        let mut g = Grid::new(5, 1);
+        g.put(0, 0, "日本語", Style::default(), 5);
+        assert_eq!(g.row_text(0), "日本 ");
         assert_eq!(truncate("日本語", 5), "日本");
-        assert_eq!(truncate("ok", 10), "ok");
+        assert_eq!(truncate("hello", 3), "hel");
     }
 }

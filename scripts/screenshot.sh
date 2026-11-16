@@ -4,7 +4,7 @@
 #
 #   scripts/screenshot.sh [path/to/tock]
 #
-# Writes docs/countdown.png, docs/stopwatch.png and docs/flash.gif.
+# Writes docs/countdown.png, docs/stopwatch.png, docs/multi.png and docs/flash.gif.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,6 +21,8 @@ t set -g status off
 t new-window -d -t shot: -n cd "$bin --title 'Focus' 25m"
 t new-window -d -t shot: -n sw "$bin --title 'Lap 3' stopwatch"
 t new-window -d -t shot: -n end "$bin --no-bell --title 'Tea' 4s"
+# Several clocks get a bigger window of their own.
+t new-session -d -s multi -x 120 -y 30 "$bin -t Tea 4m -t Pasta 9m30s -t Run stopwatch"
 
 frame=0
 grab_end() {
@@ -32,11 +34,13 @@ grab_end() {
 for _ in $(seq 12); do grab_end; sleep 0.2; done
 t capture-pane -e -N -p -t shot:cd > "$work/cd.txt"
 t capture-pane -e -N -p -t shot:sw > "$work/sw.txt"
+t capture-pane -e -N -p -t multi: > "$work/multi.txt"
 # Keep grabbing the short timer through zero and the flashing.
 for _ in $(seq 34); do grab_end; sleep 0.2; done
 
 python3 scripts/ansi2png.py "$work/cd.txt" docs/countdown.png --cols $cols --rows $rows
 python3 scripts/ansi2png.py "$work/sw.txt" docs/stopwatch.png --cols $cols --rows $rows
+python3 scripts/ansi2png.py "$work/multi.txt" docs/multi.png --cols 120 --rows 30
 # Frames grabbed before the first draw are empty; leave them out.
 mapfile -t frames < <(grep -l '█' "$work"/end-*.txt)
 python3 scripts/ansi2png.py --gif docs/flash.gif "${frames[@]}" --cols $cols --rows $rows --delay 200
