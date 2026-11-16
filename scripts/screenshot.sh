@@ -4,7 +4,8 @@
 #
 #   scripts/screenshot.sh [path/to/tock]
 #
-# Writes docs/countdown.png, docs/stopwatch.png, docs/multi.png and docs/flash.gif.
+# Writes docs/countdown.png, docs/stopwatch.png, docs/list.png, docs/multi.png
+# and docs/flash.gif.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,8 +22,15 @@ t set -g status off
 t new-window -d -t shot: -n cd "$bin --title 'Focus' 25m"
 t new-window -d -t shot: -n sw "$bin --title 'Lap 3' stopwatch"
 t new-window -d -t shot: -n end "$bin --no-bell --title 'Tea' 4s"
-# Several clocks get a bigger window of their own.
-t new-session -d -s multi -x 120 -y 30 "$bin -t Tea 4m -t Pasta 9m30s -t Run stopwatch"
+# The clock list gets a bigger window of its own, filled in through the form.
+t new-session -d -s list -x 120 -y 30 "$bin"
+lk() { t send-keys -t list "$@"; sleep 0.15; }
+add() {
+  lk a
+  lk -l "$1"
+  if [[ $2 == stopwatch ]]; then lk Tab l; else lk Tab Tab; lk -l "$2"; fi
+  lk Enter
+}
 
 frame=0
 grab_end() {
@@ -34,12 +42,26 @@ grab_end() {
 for _ in $(seq 12); do grab_end; sleep 0.2; done
 t capture-pane -e -N -p -t shot:cd > "$work/cd.txt"
 t capture-pane -e -N -p -t shot:sw > "$work/sw.txt"
-t capture-pane -e -N -p -t multi: > "$work/multi.txt"
 # Keep grabbing the short timer through zero and the flashing.
 for _ in $(seq 34); do grab_end; sleep 0.2; done
 
+# Now fill the list through the form, and show four of the clocks.
+sleep 0.4
+add Tea 4m
+add Pasta 9m30s
+add Run stopwatch
+add Bake 1h
+add Laundry 45m
+lk k
+t capture-pane -e -N -p -t list: > "$work/list.txt"
+# On to the display, then one step left so the selection frame shows.
+lk Enter Space h
+sleep 0.3
+t capture-pane -e -N -p -t list: > "$work/multi.txt"
+
 python3 scripts/ansi2png.py "$work/cd.txt" docs/countdown.png --cols $cols --rows $rows
 python3 scripts/ansi2png.py "$work/sw.txt" docs/stopwatch.png --cols $cols --rows $rows
+python3 scripts/ansi2png.py "$work/list.txt" docs/list.png --cols 120 --rows 30
 python3 scripts/ansi2png.py "$work/multi.txt" docs/multi.png --cols 120 --rows 30
 # Frames grabbed before the first draw are empty; leave them out.
 mapfile -t frames < <(grep -l '█' "$work"/end-*.txt)

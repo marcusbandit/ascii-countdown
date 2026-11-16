@@ -31,44 +31,69 @@ directory on your zsh `$fpath` and `tock.bash` for
 
 ## Use
 
+Run `tock` on its own to open the clock list. `a` adds a clock: give it a name,
+pick countdown or stopwatch, type a time. Up to four clocks go on display, and
+Enter shows them in big digits.
+
+![the clock list](docs/list.png)
+
+![four clocks on display, one selected](docs/multi.png)
+
+Or start clocks straight from the command line, which skips the list:
+
 ```sh
 tock 25m              # count down 25 minutes
 tock 1h30m            # or 90s, 1h2m3s, 45 (seconds)
 tock 10:00            # mm:ss, or h:mm:ss as in 1:30:00
 tock -t "Tea" 4m      # with a title above the clock
 tock stopwatch        # count up from zero, same as tock --up
-tock -t Tea 4m -t Pasta 10m stopwatch   # several clocks side by side
+tock -t Tea 4m -t Pasta 10m stopwatch   # up to four; each -t names the next
 ```
 
-Give up to nine clocks and they share the screen, laid out so the digits stay
-as big as possible. Each `-t` names the clock after it.
-
-![three clocks at once](docs/multi.png)
+On the list:
 
 | Key | Does |
 | --- | --- |
-| space | pause or resume every clock |
-| 1 to 9 | pause or resume that clock |
-| r | reset every clock, keeping it paused or running |
-| q, Esc, Ctrl+C | quit |
+| j k, arrows | move |
+| enter | show the display |
+| v | put a clock on display or take it off |
+| a, e | add a clock, edit the selected one (name, type, time) |
+| space, r, x | pause, reset, cancel the selected clock |
+| P, R | pause or resume all, reset all |
+| q | quit |
+
+On the display:
+
+| Key | Does |
+| --- | --- |
+| h j k l, arrows | move between clocks |
+| space, r, x, e | pause, reset, cancel, edit the selected clock |
+| a | add a clock |
+| P, R | pause or resume all, reset all |
+| esc | back to the list |
+| q | quit |
+
+Moving shows a frame around the selected clock. It hides after ten seconds
+without a key, and the keys still act on that clock.
 
 The digits scale to the largest size that fits and re-center when the window
-changes size. In the last ten seconds a countdown turns red. At zero the screen
+changes size; a terminal too small for four shows fewer and follows the
+selection. In the last ten seconds a countdown turns red. At zero its panel
 flashes red for four seconds and the terminal bell rings three times
-(`--no-bell` keeps it silent). With several clocks only the finished one
-flashes, and the rest keep going. Once every countdown has hit zero, r starts
-them over and any other key quits.
+(`--no-bell` keeps it silent), while the other clocks keep going. Once every
+countdown has hit zero, keys with no job there quit.
 
 `tock` draws on the terminal itself, so stdout is free for scripts. Each
 stopwatch prints the time it stopped at, one line each, and `tock` exits 0
-only when every countdown reached zero:
+only when no countdown was left running:
 
 ```sh
 tock 25m && notify-send "Take a break"
 lap=$(tock stopwatch)
 ```
 
-Exit codes: 0 finished, 1 countdown quit early, 2 bad arguments, 130 interrupted.
+Exit codes: 0 when no countdown was left running, 1 when one was, 2 bad
+arguments, 130 interrupted.
 Set `NO_COLOR` to draw without colors.
 
 ## Build from source
