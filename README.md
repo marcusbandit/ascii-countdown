@@ -1,5 +1,9 @@
 # tock
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/marcusbandit/ascii-countdown/main/install.sh | sh
+```
+
 A countdown timer and stopwatch that fills the terminal with big ASCII-art digits.
 One static binary for Linux on x86_64 or aarch64, with no runtime dependencies.
 
@@ -11,12 +15,9 @@ One static binary for Linux on x86_64 or aarch64, with no runtime dependencies.
 
 ## Install
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/marcusbandit/ascii-countdown/main/install.sh | sh
-```
-
-[install.sh](install.sh) picks the build for your CPU, checks its sha256 and puts
-`tock` in `~/.local/bin`, with zsh and bash completion under `~/.local/share`.
+The line at the top runs [install.sh](install.sh), which picks the build for
+your CPU, checks its sha256 and puts `tock` in `~/.local/bin`, with zsh and
+bash completion under `~/.local/share`.
 Set `TOCK_BIN_DIR` to install somewhere else, or `TOCK_VERSION=0.1.0` to pin a
 release: `curl -fsSL .../install.sh | TOCK_VERSION=v0.1.0 sh`.
 
