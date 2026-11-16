@@ -12,12 +12,22 @@ One static binary for Linux on x86_64 or aarch64, with no runtime dependencies.
 ## Install
 
 ```sh
-mkdir -p ~/.local/bin && curl -fsSL "https://github.com/marcusbandit/ascii-countdown/releases/latest/download/tock-$(uname -m)-linux.tar.gz" | tar -xz -C ~/.local/bin tock
+curl -fsSL https://raw.githubusercontent.com/marcusbandit/ascii-countdown/main/install.sh | sh
 ```
 
-That puts `tock` in `~/.local/bin`. The tarball also holds tab completion for zsh
-and bash in `completions/`. Copy `_tock` to a directory on your `$fpath`, and
-`tock.bash` to `~/.local/share/bash-completion/completions/tock`.
+[install.sh](install.sh) picks the build for your CPU, checks its sha256 and puts
+`tock` in `~/.local/bin`, with zsh and bash completion under `~/.local/share`.
+Set `TOCK_BIN_DIR` to install somewhere else, or `TOCK_VERSION=0.1.0` to pin a
+release: `curl -fsSL .../install.sh | TOCK_VERSION=v0.1.0 sh`.
+
+zsh only loads that completion when `~/.local/share/zsh/site-functions` is on
+`$fpath` before `compinit` runs.
+
+Without the script, grab the tarball for your machine from the
+[releases page](https://github.com/marcusbandit/ascii-countdown/releases) and
+copy `tock` onto your `PATH`. Its `completions/` folder holds `_tock` for a
+directory on your zsh `$fpath` and `tock.bash` for
+`~/.local/share/bash-completion/completions/tock`.
 
 ## Use
 
