@@ -131,11 +131,16 @@ pub fn compose(
         grid.put(name_x, y, &name, name_style, time_x);
 
         let face = t.face();
-        let face_style = if t.flashing() {
+        let mut face_style = if t.flashing() {
             base
         } else {
             tone_style(base, t.tone(), color)
         };
+        // Text in its row's own background colour would vanish, as a paused
+        // time did on the selected row.
+        if face_style.fg.is_some() && face_style.fg == base.bg {
+            face_style.fg = Some(Ink::Grey);
+        }
         grid.put(
             time_x + time_w - face.width().min(time_w),
             y,
@@ -208,6 +213,34 @@ mod tests {
         // The selected row is highlighted across its width.
         assert_eq!(g.cell(1, tea_y).style.bg, Some(Ink::DarkGrey));
         assert_eq!(g.cell(1, other_y).style.bg, None);
+    }
+
+    #[test]
+    fn a_paused_time_stays_readable_on_the_selected_row() {
+        let mut timers = vec![
+            timer(Some("Tea"), 240, true),
+            timer(Some("Pasta"), 600, true),
+        ];
+        timers[0].pause();
+        timers[1].pause();
+        let mut g = Grid::new(80, 24);
+        compose(&mut g, &timers, 0, 0, None, true);
+        for name in ["Tea", "Pasta"] {
+            let (_, y) = g.find(name).unwrap();
+            let row = g.row_text(y);
+            for word in ["04:00", "10:00", "paused"] {
+                if let Some(x) = row.find(word) {
+                    let cell = g.cell(x, y);
+                    assert_ne!(
+                        cell.style.fg, cell.style.bg,
+                        "{name}: {word} hides in its row"
+                    );
+                }
+            }
+        }
+        // The selected row is the one that had the problem.
+        let tea_y = g.find("Tea").unwrap().1;
+        assert_eq!(g.cell(1, tea_y).style.bg, Some(Ink::DarkGrey));
     }
 
     #[test]
