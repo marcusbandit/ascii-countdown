@@ -56,8 +56,8 @@ The digits scale to the largest size that fits and re-center when the window
 changes size. In the last ten seconds a countdown turns red. At zero the screen
 flashes red for four seconds and the terminal bell rings three times
 (`--no-bell` keeps it silent). With several clocks only the finished one
-flashes, and the rest keep going. Once every countdown has hit zero, any key
-quits; r starts finished ones over.
+flashes, and the rest keep going. Once every countdown has hit zero, r starts
+them over and any other key quits.
 
 `tock` draws on the terminal itself, so stdout is free for scripts. Each
 stopwatch prints the time it stopped at, one line each, and `tock` exits 0

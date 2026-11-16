@@ -41,7 +41,8 @@ Keys:
   1-9     pause or resume one clock
   r       reset every clock
   q       quit (also Esc and Ctrl+C)
-  any key quits once every countdown has finished
+  once every countdown has finished, r starts them over and any other
+  key quits
 
 Stopwatches print the time they stopped at, one line each, in order.
 Exit status: 0 when every countdown finished, 1 when one was quit early,
@@ -84,17 +85,21 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     let mut bell = true;
     let mut only_positional = false;
 
+    // Titles are trimmed here, and a blank one counts as no title at all.
     let set_title = |title: &mut Option<String>, value: String| {
-        if let Some(old) = title.replace(value.clone()) {
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(());
+        }
+        if let Some(old) = title.replace(value.to_string()) {
             return Err(format!("two titles in a row: '{old}' and '{value}'"));
         }
         Ok(())
     };
     let push = |clocks: &mut Vec<ClockSpec>, title: &mut Option<String>, mode: Mode| {
-        let title = title.take().map(|t| t.trim().to_string());
         clocks.push(ClockSpec {
             mode,
-            title: title.filter(|t| !t.is_empty()),
+            title: title.take(),
         });
     };
 
@@ -133,10 +138,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     // A title after the last clock names that clock, as in `tock 25m -t Focus`.
     if let Some(t) = title {
         match clocks.last_mut() {
-            Some(last) if last.title.is_none() => {
-                let t = t.trim().to_string();
-                last.title = Some(t).filter(|t| !t.is_empty());
-            }
+            Some(last) if last.title.is_none() => last.title = Some(t),
             Some(_) => {
                 return Err(format!(
                     "title '{t}' comes after the last clock; put it before the clock it names"
@@ -208,6 +210,9 @@ const FLASH_HALF: Duration = Duration::from_millis(250);
 /// The bell rings at zero and twice more, this far apart.
 const BELL_EVERY: Duration = Duration::from_secs(1);
 const BELLS: u32 = 3;
+/// Bells due at the same moment, from clocks ending close together, ring
+/// one after another this far apart so each one is heard.
+const BELL_GAP: Duration = Duration::from_millis(300);
 /// Keys pressed this soon after the last countdown ends do not quit, so a key
 /// that was already on its way does not close the screen before anyone sees it.
 const DONE_GRACE: Duration = Duration::from_millis(600);
@@ -224,7 +229,16 @@ struct Running<'a> {
     bells_rung: u32,
 }
 
-impl Running<'_> {
+impl<'a> Running<'a> {
+    fn new(spec: &'a ClockSpec) -> Self {
+        Running {
+            spec,
+            clock: Clock::started(),
+            done_at: None,
+            bells_rung: 0,
+        }
+    }
+
     fn is_countdown(&self) -> bool {
         matches!(self.spec.mode, Mode::Countdown(_))
     }
@@ -278,18 +292,11 @@ enum Outcome {
 
 fn run(opts: &Options, stop: &AtomicBool) -> io::Result<Outcome> {
     let mut screen = Screen::enter()?;
-    let mut clocks: Vec<Running> = opts
-        .clocks
-        .iter()
-        .map(|spec| Running {
-            spec,
-            clock: Clock::started(),
-            done_at: None,
-            bells_rung: 0,
-        })
-        .collect();
+    let mut clocks: Vec<Running> = opts.clocks.iter().map(Running::new).collect();
     let multi = clocks.len() > 1;
     let mut last: Option<(Vec<Panel>, (u16, u16))> = None;
+    let mut bells_waiting = 0;
+    let mut next_bell = Instant::now();
 
     let stopwatch_times = |clocks: &[Running]| -> Vec<Duration> {
         clocks
@@ -304,14 +311,16 @@ fn run(opts: &Options, stop: &AtomicBool) -> io::Result<Outcome> {
             return Ok(Outcome::Interrupted);
         }
 
-        let mut bells = 0;
         for c in &mut clocks {
             c.check_done();
-            bells += c.bells_due();
+            bells_waiting += c.bells_due();
         }
-        // Several clocks ending together ring once, not once each.
-        if opts.bell && bells > 0 {
-            screen.bell()?;
+        if bells_waiting > 0 && Instant::now() >= next_bell {
+            if opts.bell {
+                screen.bell()?;
+            }
+            bells_waiting -= 1;
+            next_bell = Instant::now() + BELL_GAP;
         }
 
         let panels: Vec<Panel> = clocks
@@ -320,7 +329,10 @@ fn run(opts: &Options, stop: &AtomicBool) -> io::Result<Outcome> {
             .map(|(i, c)| panel_for(c, multi.then_some(i + 1)))
             .collect();
         let size = crossterm::terminal::size()?;
-        if last.as_ref() != Some(&(panels.clone(), size)) {
+        if last
+            .as_ref()
+            .is_none_or(|(p, s)| *p != panels || *s != size)
+        {
             screen.draw(&panels, size)?;
             last = Some((panels, size));
         }
@@ -338,8 +350,13 @@ fn run(opts: &Options, stop: &AtomicBool) -> io::Result<Outcome> {
             _ => continue,
         };
 
-        // Every clock is a finished countdown: any key quits.
+        // Every clock is a finished countdown: r starts them over, any
+        // other key quits.
         let all_done = clocks.iter().all(|c| c.done_at.is_some());
+        if all_done && !is_interrupt(&key) && matches!(key.code, KeyCode::Char('r' | 'R')) {
+            clocks.iter_mut().for_each(Running::reset);
+            continue;
+        }
         if all_done {
             let latest = clocks.iter().filter_map(|c| c.done_at).max();
             if is_interrupt(&key) || latest.is_some_and(|t| t.elapsed() >= DONE_GRACE) {
@@ -592,6 +609,15 @@ mod tests {
         assert!(cli(&["1m"; 10]).is_err());
         assert!(cli(&["-t", "A", "-t", "B", "5m"]).is_err());
         assert!(cli(&["-t", "A", "5m", "-t", "B"]).is_err());
+        // Blank titles are no titles, so they never clash.
+        assert_eq!(
+            one(&["--title=", "-t", "Tea", "5m"]).title.as_deref(),
+            Some("Tea")
+        );
+        assert_eq!(
+            one(&["-t", "A", "5m", "-t", "  "]).title.as_deref(),
+            Some("A")
+        );
         // After --, a dash-looking argument is a duration, and a bad one.
         assert!(cli(&["--", "-5m"]).is_err());
     }
@@ -621,12 +647,7 @@ mod tests {
             mode: Mode::Countdown(Duration::from_millis(1)),
             title: None,
         };
-        let mut r = Running {
-            spec: &spec,
-            clock: Clock::started(),
-            done_at: None,
-            bells_rung: 0,
-        };
+        let mut r = Running::new(&spec);
         std::thread::sleep(Duration::from_millis(5));
         r.check_done();
         assert!(r.done_at.is_some());
@@ -646,24 +667,14 @@ mod tests {
             mode: countdown(60),
             title: Some("Tea".into()),
         };
-        let r = Running {
-            spec: &spec,
-            clock: Clock::started(),
-            done_at: None,
-            bells_rung: 0,
-        };
+        let r = Running::new(&spec);
         assert_eq!(panel_for(&r, None).title.as_deref(), Some("Tea"));
         assert_eq!(panel_for(&r, Some(2)).title.as_deref(), Some("2  Tea"));
         let spec = ClockSpec {
             mode: Mode::Stopwatch,
             title: None,
         };
-        let r = Running {
-            spec: &spec,
-            clock: Clock::started(),
-            done_at: None,
-            bells_rung: 0,
-        };
+        let r = Running::new(&spec);
         assert_eq!(panel_for(&r, None).title, None);
         assert_eq!(panel_for(&r, Some(3)).title.as_deref(), Some("3"));
     }

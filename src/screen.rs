@@ -125,11 +125,12 @@ impl Grid {
 /// Rows kept free above and below the digits for the title and the status.
 const BAND: usize = 2;
 
-/// Columns kept free on each side of a panel, when it is wide enough to spare them.
-fn side(w: usize) -> usize {
-    match w {
-        40.. => 2,
-        16.. => 1,
+/// Columns kept free on each side of a panel, when it is wide enough to spare
+/// them. Panels next to each other always keep one, so their digits never touch.
+fn side(w: usize, multi: bool) -> usize {
+    match (w, multi) {
+        (40.., _) => 2,
+        (_, true) => 1,
         _ => 0,
     }
 }
@@ -152,9 +153,10 @@ fn scales(rows: usize) -> Vec<Scale> {
     v
 }
 
-fn fits(face: &str, r: Rect, (sx, sy, bands): Scale) -> bool {
+fn fits(face: &str, r: Rect, (sx, sy, bands): Scale, multi: bool) -> bool {
     let band_rows = if bands { 2 * BAND } else { 0 };
-    font::pixel_width(face) * sx <= r.w - 2 * side(r.w) && font::ROWS * sy + band_rows <= r.h
+    let inner = r.w.saturating_sub(2 * side(r.w, multi));
+    font::pixel_width(face) * sx <= inner && font::ROWS * sy + band_rows <= r.h
 }
 
 /// Splits the screen into `n` panels, `per_row` to a row. A short last row
@@ -186,9 +188,12 @@ fn plan(panels: &[Panel], cols: usize, rows: usize) -> (Vec<Rect>, Option<Scale>
     let mut best: Option<(usize, usize)> = None;
     for per_row in 1..=n {
         let rects = panel_rects(n, per_row, cols, rows);
-        let fit = options
-            .iter()
-            .position(|&s| panels.iter().zip(&rects).all(|(p, &r)| fits(&p.face, r, s)));
+        let fit = options.iter().position(|&s| {
+            panels
+                .iter()
+                .zip(&rects)
+                .all(|(p, &r)| fits(&p.face, r, s, n > 1))
+        });
         // On a tie the layout with more panels to a row wins: side by side
         // suits a wide terminal.
         if let Some(rank) = fit {
@@ -396,9 +401,13 @@ impl Screen {
             let mut style = None;
             let mut run = String::new();
             for x in 0..end {
-                let cell = grid.cell(x, y);
+                let mut cell = grid.cell(x, y);
                 if cell.ch == '\0' {
                     continue;
+                }
+                // A wide character would spill into the column held back above.
+                if x + cell.ch.width().unwrap_or(1) > end {
+                    cell.ch = ' ';
                 }
                 if style != Some(cell.style) {
                     if let Some(s) = style {
@@ -500,6 +509,14 @@ mod tests {
         let cols = ink_cols(&g);
         let (left, right) = (cols[0], 80 - 1 - cols[cols.len() - 1]);
         assert!(left.abs_diff(right) <= 1);
+    }
+
+    #[test]
+    fn a_single_clock_keeps_square_pixels_in_a_narrow_pane() {
+        // 17 font pixels two columns wide fill 34 columns exactly.
+        let g = compose(&[panel("25:00", None)], 34, 9, true);
+        let c = ink_cols(&g);
+        assert_eq!((c[0], c[c.len() - 1]), (0, 33));
     }
 
     #[test]

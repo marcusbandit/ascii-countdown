@@ -105,6 +105,13 @@ t send-keys -t smoke:pair x
 sleep 0.4
 check "any key quits once every clock finished" '[[ $(exit_code pair) == 0 ]]'
 
+start again 1s 1s
+sleep 2.2
+t send-keys -t smoke:again r
+sleep 0.4
+check "r starts finished clocks over instead of quitting" "[[ -z \$(exit_code again) ]] && [[ \$(count again \"TIME'S UP\") == 0 ]]"
+t send-keys -t smoke:again q
+
 start mixed 1s 5m
 sleep 2.2
 t send-keys -t smoke:mixed x
