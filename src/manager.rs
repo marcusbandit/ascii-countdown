@@ -4,7 +4,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::display::{flash_style, tone_style, Tone};
 use crate::screen::{truncate, Grid, Ink, Rect, Style};
-use crate::timer::Timer;
+use crate::timer::{Mode, State, Timer};
 
 /// The list never grows wider than this, so a name and its time stay close.
 const MAX_W: usize = 72;
@@ -26,10 +26,7 @@ pub fn keys(t: Option<&Timer>) -> Vec<Key> {
     };
     // Most used first: a narrow bar drops keys from the end, but keeps quit.
     let mut keys = vec![("a", "add"), ("enter", "full screen")];
-    // A clock whose time is up has nothing to pause; reset starts it over.
-    if !t.is_done() {
-        keys.push(("space", if t.is_paused() { "resume" } else { "pause" }));
-    }
+    keys.extend(clock_keys(t));
     keys.extend([
         ("e", "edit"),
         ("v", if t.shown { "hide" } else { "show" }),
@@ -37,6 +34,41 @@ pub fn keys(t: Option<&Timer>) -> Vec<Key> {
         ("x", "cancel"),
         ("q", "quit"),
     ]);
+    keys
+}
+
+/// The keys on the full screen view. While a clock is selected they are the
+/// ones that act on it; once the selection hides, only the way back.
+pub fn display_keys(t: Option<&Timer>, selected: bool, multi: bool) -> Vec<Key> {
+    let mut keys = Vec::new();
+    if let (Some(t), true) = (t, selected) {
+        keys.extend(clock_keys(t));
+        keys.extend([("e", "edit"), ("r", "reset"), ("x", "cancel")]);
+        if multi {
+            keys.push(("hjkl", "move"));
+        }
+        keys.push(("a", "add"));
+    }
+    keys.push(("esc", "list"));
+    keys
+}
+
+/// The keys that act on clock `t` itself, which the list and the full screen
+/// view share.
+pub fn clock_keys(t: &Timer) -> Vec<Key> {
+    let mut keys = Vec::new();
+    // A clock whose time is up has nothing to pause; reset starts it over.
+    match t.state() {
+        State::Done => {}
+        State::Paused => keys.push(("space", "start")),
+        State::Running => keys.push(("space", "pause")),
+    }
+    match t.mode {
+        // Minus is its mirror and stays off the bar to keep it short.
+        Mode::Countdown(_) => keys.push(("+", "1 min")),
+        Mode::Rounds => keys.push(("n", "next round")),
+        Mode::Stopwatch => {}
+    }
     keys
 }
 
@@ -147,10 +179,12 @@ pub fn compose(
             face_style,
             time_end,
         );
-        let (status, status_style) = match t.status() {
-            "" => ("", base),
-            "PAUSED" => ("paused", base),
-            _ if plain => ("time's up", base.bold()),
+        let round = format!("round {}", t.round());
+        let (status, status_style) = match (t.state(), t.mode) {
+            (State::Running, Mode::Rounds) => (round.as_str(), base),
+            (State::Running, _) => ("", base),
+            (State::Paused, _) => ("paused", base),
+            (State::Done, _) if plain => ("time's up", base.bold()),
             _ => (
                 "time's up",
                 if color {
@@ -183,11 +217,21 @@ pub fn compose(
 
 /// The key bar: each key in the accent, then what it does. It starts at the
 /// list's left edge and may run past its right one. Keys that do not fit are
-/// dropped from the end, except the last, which is how to quit.
+/// dropped from the end, except the last, which is the way out.
 pub fn toolbar(grid: &mut Grid, y: usize, keys: &[Key], color: bool) {
+    let x = column(grid.cols).0 + 1;
+    bar(grid, y, keys, color, Some(x));
+}
+
+/// The key bar centered on the screen, for the full screen view.
+pub fn toolbar_centered(grid: &mut Grid, y: usize, keys: &[Key], color: bool) {
+    bar(grid, y, keys, color, None);
+}
+
+fn bar(grid: &mut Grid, y: usize, keys: &[Key], color: bool, x: Option<usize>) {
     const GAP: usize = 3;
-    let (x0, _) = column(grid.cols);
     let end = grid.cols.saturating_sub(2);
+    let start = x.unwrap_or(2);
     grid.fill(
         Rect {
             x: 0,
@@ -198,12 +242,12 @@ pub fn toolbar(grid: &mut Grid, y: usize, keys: &[Key], color: bool) {
         Style::default(),
     );
     let width = |k: &Key| k.0.width() + 1 + k.1.width();
-    let mut keep: Vec<Key> = keys.to_vec();
     let total = |ks: &[Key]| ks.iter().map(width).sum::<usize>() + GAP * ks.len().saturating_sub(1);
-    while keep.len() > 1 && x0 + 1 + total(&keep) > end {
+    let mut keep: Vec<Key> = keys.to_vec();
+    while keep.len() > 1 && start + total(&keep) > end {
         keep.remove(keep.len() - 2);
     }
-    let mut x = x0 + 1;
+    let mut x = x.unwrap_or_else(|| grid.cols.saturating_sub(total(&keep)) / 2);
     for (k, what) in keep {
         x = grid.put(x, y, k, Style::accent(color), end);
         x = grid.put(x + 1, y, what, Style::default(), end) + GAP;
@@ -302,7 +346,8 @@ mod tests {
         assert!(keys(Some(&t)).contains(&("v", "show")));
         t.pause();
         t.shown = true;
-        assert!(keys(Some(&t)).contains(&("space", "resume")));
+        assert!(keys(Some(&t)).contains(&("space", "start")));
+        assert!(keys(Some(&t)).contains(&("+", "1 min")));
         assert!(keys(Some(&t)).contains(&("v", "hide")));
         let mut done = timer(None, 1, false);
         done.clock.stop_at(std::time::Duration::from_secs(2));

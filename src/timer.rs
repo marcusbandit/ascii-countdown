@@ -1,4 +1,5 @@
-//! One clock: a countdown or a stopwatch that can be paused, reset and renamed.
+//! One clock: a countdown, a stopwatch or a rounds clock that can be paused,
+//! reset and renamed.
 
 use std::time::{Duration, Instant};
 
@@ -9,7 +10,20 @@ use crate::duration;
 pub enum Mode {
     Countdown(Duration),
     Stopwatch,
+    /// A stopwatch split into rounds, timing each one.
+    Rounds,
 }
+
+/// Where a clock is: running, paused, or a countdown whose time is up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum State {
+    Running,
+    Paused,
+    Done,
+}
+
+/// What + and - add to or take off a countdown.
+pub const STEP: Duration = Duration::from_secs(60);
 
 /// A clock as asked for on the command line or in the form.
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +94,8 @@ pub struct Timer {
     bells_rung: u32,
     /// On the display view. At most four clocks are.
     pub shown: bool,
+    /// For a rounds clock: the elapsed time at the end of each round so far.
+    pub marks: Vec<Duration>,
 }
 
 impl Timer {
@@ -91,6 +107,62 @@ impl Timer {
             done_at: None,
             bells_rung: 0,
             shown,
+            marks: Vec::new(),
+        }
+    }
+
+    pub fn state(&self) -> State {
+        if self.is_done() {
+            State::Done
+        } else if self.is_paused() {
+            State::Paused
+        } else {
+            State::Running
+        }
+    }
+
+    /// Ends the round a rounds clock is in and starts the next. A round of no
+    /// time at all, from a double press, is not one.
+    pub fn next_round(&mut self) {
+        let now = self.clock.elapsed();
+        if self.mode == Mode::Rounds && now > self.marks.last().copied().unwrap_or_default() {
+            self.marks.push(now);
+        }
+    }
+
+    /// The round a rounds clock is in, counting from 1.
+    pub fn round(&self) -> usize {
+        self.marks.len() + 1
+    }
+
+    /// How long the current round has run.
+    pub fn round_time(&self) -> Duration {
+        self.clock.elapsed() - self.marks.last().copied().unwrap_or_default()
+    }
+
+    /// The mean of the finished rounds, once there is one.
+    pub fn average(&self) -> Option<Duration> {
+        let n = u32::try_from(self.marks.len()).ok().filter(|&n| n > 0)?;
+        Some(*self.marks.last()? / n)
+    }
+
+    /// Adds `by` to a countdown, or takes it off when `more` is false. A
+    /// finished countdown gets the time back and runs again. Taking time off
+    /// stops a second short of zero, so the minus key never ends a clock.
+    pub fn adjust(&mut self, by: Duration, more: bool) {
+        let Mode::Countdown(total) = self.mode else {
+            return;
+        };
+        let elapsed = self.clock.elapsed();
+        if more {
+            self.mode = Mode::Countdown(total + by);
+            if self.done_at.take().is_some() {
+                self.bells_rung = 0;
+                self.clock.toggle();
+            }
+        } else if !self.is_done() {
+            let floor = elapsed + Duration::from_secs(1);
+            self.mode = Mode::Countdown(total.saturating_sub(by).max(floor).min(total));
         }
     }
 
@@ -154,6 +226,7 @@ impl Timer {
         } else {
             self.clock.reset();
         }
+        self.marks.clear();
     }
 
     /// From zero, running, as if just created.
@@ -161,6 +234,7 @@ impl Timer {
         self.clock = Clock::started();
         self.done_at = None;
         self.bells_rung = 0;
+        self.marks.clear();
     }
 
     pub fn flashing(&self) -> bool {
@@ -177,6 +251,7 @@ impl Timer {
                 duration::countdown_face(left, total.as_secs() >= 3600)
             }
             Mode::Stopwatch => duration::stopwatch_face(self.clock.elapsed()),
+            Mode::Rounds => duration::stopwatch_face(self.round_time()),
         }
     }
 
@@ -197,15 +272,25 @@ impl Timer {
         }
     }
 
-    /// The state in one word, as the display and the list show it.
-    pub fn status(&self) -> &'static str {
-        if self.is_done() {
-            "TIME'S UP"
-        } else if self.is_paused() {
-            "PAUSED"
-        } else {
-            ""
+    /// The line under the digits on the display: the state, and for a rounds
+    /// clock the round it is in and the average so far.
+    pub fn status(&self) -> String {
+        let state = match self.state() {
+            State::Done => "TIME'S UP",
+            State::Paused => "PAUSED",
+            State::Running => "",
+        };
+        if self.mode != Mode::Rounds {
+            return state.to_string();
         }
+        let mut parts = vec![format!("ROUND {}", self.round())];
+        if let Some(avg) = self.average() {
+            parts.push(format!("AVG {}", duration::stopwatch_face(avg)));
+        }
+        if !state.is_empty() {
+            parts.insert(0, state.to_string());
+        }
+        parts.join("   ")
     }
 
     /// What the clock is called: its title, or what kind of clock it is.
@@ -214,6 +299,7 @@ impl Timer {
             (Some(t), _) => t.clone(),
             (None, Mode::Countdown(d)) => duration::compact(d),
             (None, Mode::Stopwatch) => "stopwatch".into(),
+            (None, Mode::Rounds) => "rounds".into(),
         }
     }
 
@@ -266,6 +352,7 @@ mod tests {
         t.check_done();
         assert!(t.is_done());
         assert_eq!(t.status(), "TIME'S UP");
+        assert_eq!(t.state(), State::Done);
         assert_eq!(t.bells_due(), 1);
         assert_eq!(t.bells_due(), 0);
         t.toggle();
@@ -302,5 +389,66 @@ mod tests {
         t.resume();
         t.resume();
         assert!(!t.is_paused());
+    }
+
+    #[test]
+    fn plus_and_minus_move_a_countdown_by_a_minute() {
+        let mut t = countdown(120_000);
+        t.pause();
+        t.adjust(STEP, true);
+        assert_eq!(t.mode, Mode::Countdown(Duration::from_secs(180)));
+        assert!(t.is_paused(), "adding time keeps a paused clock paused");
+        t.adjust(STEP, false);
+        t.adjust(STEP, false);
+        t.adjust(STEP, false);
+        // Never down to zero: a second is left.
+        assert_eq!(t.face(), "00:01");
+        assert!(!t.is_done());
+    }
+
+    #[test]
+    fn plus_brings_a_finished_countdown_back() {
+        let mut t = countdown(1);
+        std::thread::sleep(Duration::from_millis(5));
+        t.check_done();
+        assert!(t.is_done());
+        t.adjust(STEP, true);
+        assert!(!t.is_done());
+        assert!(t.clock.running());
+        assert_eq!(t.face(), "01:00");
+        t.check_done();
+        assert!(!t.is_done());
+    }
+
+    #[test]
+    fn rounds_time_each_round_and_average_them() {
+        let mut t = Timer::new(
+            ClockSpec {
+                mode: Mode::Rounds,
+                title: None,
+            },
+            true,
+        );
+        assert_eq!((t.round(), t.average()), (1, None));
+        assert_eq!(t.status(), "ROUND 1");
+        t.clock.stop_at(Duration::from_secs(60));
+        t.next_round();
+        t.next_round();
+        assert_eq!(
+            t.round(),
+            2,
+            "a second press with no time between is ignored"
+        );
+        t.clock.stop_at(Duration::from_secs(150));
+        t.next_round();
+        assert_eq!(t.average(), Some(Duration::from_secs(75)));
+        t.clock.stop_at(Duration::from_secs(160));
+        assert_eq!(t.face(), "00:10.0");
+        assert_eq!(t.status(), "PAUSED   ROUND 3   AVG 01:15.0");
+        t.reset();
+        assert_eq!(t.round(), 1);
+        // Plus is for countdowns only.
+        t.adjust(STEP, true);
+        assert_eq!(t.mode, Mode::Rounds);
     }
 }

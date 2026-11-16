@@ -4,8 +4,8 @@
 #
 #   scripts/screenshot.sh [path/to/tock]
 #
-# Writes docs/countdown.png, docs/stopwatch.png, docs/list.png, docs/multi.png
-# and docs/flash.gif.
+# Writes docs/countdown.png, docs/stopwatch.png, docs/form.png, docs/list.png,
+# docs/multi.png and docs/flash.gif.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,12 +25,17 @@ t new-window -d -t shot: -n end "$bin --no-bell --title 'Tea' 4s"
 # The clock list gets a bigger window of its own, filled in through the form.
 t new-session -d -s list -x 120 -y 30 "$bin"
 lk() { t send-keys -t list "$@"; sleep 0.15; }
+# add NAME TIME|stopwatch|rounds [later]: fills in the new clock screen. It
+# opens on the name of a running stopwatch; the type is the row above.
 add() {
   lk a
   lk -l "$1"
-  # A new clock starts as a stopwatch; a countdown switches type, then takes a time.
-  if [[ $2 != stopwatch ]]; then lk Tab l Tab; lk -l "$2"; fi
-  lk Enter
+  case $2 in
+    stopwatch) ;;
+    rounds) lk BTab Left Tab ;;
+    *) lk BTab Right Tab Tab; lk -l "$2" ;;
+  esac
+  if [[ ${3:-} == later ]]; then lk Tab Space; fi
 }
 
 frame=0
@@ -49,11 +54,15 @@ for _ in $(seq 34); do grab_end; sleep 0.2; done
 # Now fill the list through the form, and show four of the clocks.
 sleep 0.4
 add Tea 4m
-add Pasta 9m30s
-add Run stopwatch
-add Bake 1h
-add Laundry 45m
-lk k
+t capture-pane -e -N -p -t list: > "$work/form.txt"
+lk Enter
+add Pasta 9m30s; lk Enter
+add Laps rounds; lk Enter
+add Bake 1h; lk Enter
+add Laundry 45m later; lk Enter
+sleep 1.2
+lk k k n
+lk j
 t capture-pane -e -N -p -t list: > "$work/list.txt"
 # On to the display, then one step left so the selection frame shows.
 lk Enter Space h
@@ -62,6 +71,7 @@ t capture-pane -e -N -p -t list: > "$work/multi.txt"
 
 python3 scripts/ansi2png.py "$work/cd.txt" docs/countdown.png --cols $cols --rows $rows
 python3 scripts/ansi2png.py "$work/sw.txt" docs/stopwatch.png --cols $cols --rows $rows
+python3 scripts/ansi2png.py "$work/form.txt" docs/form.png --cols 120 --rows 30
 python3 scripts/ansi2png.py "$work/list.txt" docs/list.png --cols 120 --rows 30
 python3 scripts/ansi2png.py "$work/multi.txt" docs/multi.png --cols 120 --rows 30
 # Frames grabbed before the first draw are empty; leave them out.

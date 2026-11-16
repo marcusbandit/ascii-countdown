@@ -8,8 +8,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::display::{self, Panel};
 use crate::form::{Form, FormEvent};
 use crate::manager;
-use crate::screen::Grid;
-use crate::timer::{ClockSpec, Timer};
+use crate::screen::{Grid, Rect};
+use crate::timer::{ClockSpec, Timer, STEP};
 
 /// The display view shows this many clocks at most.
 pub const MAX_SHOWN: usize = 4;
@@ -171,10 +171,10 @@ impl App {
             match form.key(key) {
                 FormEvent::Open => {}
                 FormEvent::Cancel => self.form = None,
-                FormEvent::Save { title, mode } => {
+                FormEvent::Save { title, mode, start } => {
                     let target = form.target;
                     self.form = None;
-                    self.save(target, ClockSpec { mode, title });
+                    self.save(target, ClockSpec { mode, title }, start);
                 }
             }
             if self.view == View::Display {
@@ -196,7 +196,8 @@ impl App {
         }
     }
 
-    fn save(&mut self, target: Option<usize>, spec: ClockSpec) {
+    /// Applies the form. A new clock that should not `start` yet is added paused.
+    fn save(&mut self, target: Option<usize>, spec: ClockSpec, start: bool) {
         match target.and_then(|i| self.timers.get_mut(i)) {
             Some(t) => {
                 t.title = spec.title;
@@ -207,7 +208,12 @@ impl App {
             }
             None => {
                 let shown = self.shown().len() < MAX_SHOWN;
-                self.timers.push(Timer::new(spec, shown));
+                let mut t = Timer::new(spec, shown);
+                if !start {
+                    // Stopped at zero, so it reads 00:00.0 until space starts it.
+                    t.clock.stop_at(Duration::ZERO);
+                }
+                self.timers.push(t);
                 self.sel = self.timers.len() - 1;
                 if !shown {
                     // Show where it went, rather than leave the display unchanged.
@@ -240,6 +246,17 @@ impl App {
                 }
             }
             KeyCode::Char('x') | KeyCode::Delete => self.cancel(),
+            KeyCode::Char('+' | '=') | KeyCode::Char('-' | '_') => {
+                let more = matches!(code, KeyCode::Char('+' | '='));
+                if let Some(t) = self.timers.get_mut(self.sel) {
+                    t.adjust(STEP, more);
+                }
+            }
+            KeyCode::Char('n') => {
+                if let Some(t) = self.timers.get_mut(self.sel) {
+                    t.next_round();
+                }
+            }
             KeyCode::Char('P') => {
                 // Pause everything that runs; if nothing runs, resume all.
                 let any_running = self.timers.iter().any(|t| !t.is_paused() && !t.is_done());
@@ -330,7 +347,9 @@ impl App {
         if self.quick && self.all_done() {
             let keeps = matches!(
                 key.code,
-                KeyCode::Char('r' | 'R' | 'e' | 'x' | 'a') | KeyCode::Delete | KeyCode::Enter
+                KeyCode::Char('r' | 'R' | 'e' | 'x' | 'a' | '+' | '=')
+                    | KeyCode::Delete
+                    | KeyCode::Enter
             );
             if !keeps {
                 let latest = self.timers.iter().filter_map(|t| t.done_at).max();
@@ -379,8 +398,12 @@ impl App {
         if self.view == View::Display && self.shown().is_empty() {
             self.view = View::List;
         }
-        match self.view {
-            View::List => {
+        // The form takes the whole screen when it fits. On a window shrunk
+        // under it the view stays, with the form's keys to close it.
+        let form_fits = Form::fits(cols, rows);
+        match (&self.form, self.view) {
+            (Some(form), _) if form_fits => form.draw(&mut grid, self.color),
+            (_, View::List) => {
                 let note = self.note.as_ref().map(|(n, _)| n.as_str());
                 self.list_top = manager::compose(
                     &mut grid,
@@ -391,28 +414,49 @@ impl App {
                     self.color,
                 );
             }
-            View::Display => self.compose_display(&mut grid),
+            (_, View::Display) => self.compose_display(&mut grid),
         }
         // The same size the list needs before it draws more than one line.
         let bar = rows.checked_sub(1).filter(|_| rows >= 4 && cols >= 10);
         if let Some(form) = &self.form {
-            // A window shrunk under the dialog keeps the list clear, and the
-            // form's keys still say how to close it.
-            if Form::fits(cols, rows) {
-                grid.dim_all();
-                form.draw(&mut grid, self.color);
-            }
             if let Some(y) = bar {
                 manager::toolbar(&mut grid, y, &form.keys(), self.color);
             }
-        } else if let (View::List, Some(y)) = (self.view, bar) {
-            let keys = manager::keys(self.timers.get(self.sel));
-            manager::toolbar(&mut grid, y, &keys, self.color);
+        } else if let Some(y) = bar {
+            match self.view {
+                View::List => {
+                    let keys = manager::keys(self.timers.get(self.sel));
+                    manager::toolbar(&mut grid, y, &keys, self.color);
+                }
+                View::Display if self.display_bar(rows) => {
+                    let keys = manager::display_keys(
+                        self.timers.get(self.sel),
+                        self.frame_visible(),
+                        self.window.len() > 1,
+                    );
+                    manager::toolbar_centered(&mut grid, y, &keys, self.color);
+                }
+                View::Display => {}
+            }
         }
         grid
     }
 
+    /// Whether the full screen view keeps its last row for the key bar. A
+    /// short terminal gives every row to the digits.
+    fn display_bar(&self, rows: usize) -> bool {
+        rows >= 8
+    }
+
     fn compose_display(&mut self, grid: &mut Grid) {
+        // The key bar's row is kept even while it only says esc, so the
+        // digits do not move when the keys come and go.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            w: grid.cols,
+            h: grid.rows - usize::from(self.display_bar(grid.rows)),
+        };
         let shown = self.shown();
         if !shown.contains(&self.sel) {
             self.sel = shown[0];
@@ -434,7 +478,7 @@ impl App {
         let mut k = shown.len();
         while k > 1 {
             let s = window_for(k, self.window_start);
-            if display::fits_big(&panels[s..s + k], grid.cols, grid.rows) {
+            if display::fits_big(&panels[s..s + k], area.w, area.h) {
                 break;
             }
             k -= 1;
@@ -443,7 +487,8 @@ impl App {
         self.window_start = start;
         self.window = shown[start..start + k].to_vec();
         let selected = self.frame_visible().then_some(pos - start);
-        self.per_row = display::compose(grid, &panels[start..start + k], self.color, selected);
+        self.per_row =
+            display::compose_in(grid, area, &panels[start..start + k], self.color, selected);
     }
 }
 
@@ -517,8 +562,8 @@ mod tests {
         assert_eq!(a.timers[0].title.as_deref(), Some("Pasta"));
         assert!(a.timers[0].clock.elapsed() >= Duration::from_millis(20));
 
+        // The type sits above the name, so the time is one field down.
         press(&mut a, KeyCode::Char('e'));
-        press(&mut a, KeyCode::Tab);
         press(&mut a, KeyCode::Tab);
         a.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         typed(&mut a, "2m");
@@ -714,5 +759,78 @@ mod tests {
         assert_eq!(a.shown(), vec![0, 1]);
         assert_eq!(a.sel, 1);
         assert_eq!(a.timers[1].mode, Mode::Stopwatch);
+    }
+
+    #[test]
+    fn plus_and_minus_change_the_selected_countdown() {
+        let mut a = app(2);
+        a.sel = 1;
+        press(&mut a, KeyCode::Char('+'));
+        press(&mut a, KeyCode::Char('='));
+        assert_eq!(a.timers[1].mode, Mode::Countdown(Duration::from_secs(720)));
+        assert_eq!(a.timers[0].mode, Mode::Countdown(Duration::from_secs(600)));
+        press(&mut a, KeyCode::Char('-'));
+        assert_eq!(a.timers[1].mode, Mode::Countdown(Duration::from_secs(660)));
+    }
+
+    #[test]
+    fn a_clock_added_for_later_waits_paused() {
+        let mut a = app(0);
+        press(&mut a, KeyCode::Char('a'));
+        // Name, then down to Start, which switches to later.
+        press(&mut a, KeyCode::Tab);
+        press(&mut a, KeyCode::Char(' '));
+        press(&mut a, KeyCode::Enter);
+        assert!(a.timers[0].is_paused());
+        assert_eq!(a.timers[0].clock.elapsed(), Duration::ZERO);
+        press(&mut a, KeyCode::Char(' '));
+        assert!(!a.timers[0].is_paused(), "space starts it");
+    }
+
+    #[test]
+    fn n_marks_a_round_on_a_rounds_clock() {
+        let mut a = App::new(
+            vec![ClockSpec {
+                mode: Mode::Rounds,
+                title: None,
+            }],
+            false,
+            true,
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        press(&mut a, KeyCode::Char('n'));
+        assert_eq!(a.timers[0].round(), 2);
+    }
+
+    #[test]
+    fn the_full_screen_bar_shows_keys_only_while_a_clock_is_selected() {
+        let mut a = app(2);
+        assert_eq!(a.view, View::Display);
+        let g = a.compose(100, 30);
+        let bar = g.row_text(29);
+        assert!(bar.contains("esc list"), "{bar:?}");
+        assert!(!bar.contains("space"), "nothing selected yet: {bar:?}");
+        press(&mut a, KeyCode::Char('l'));
+        let g = a.compose(100, 30);
+        let bar = g.row_text(29);
+        for k in ["space pause", "+ 1 min", "hjkl move", "esc list"] {
+            assert!(bar.contains(k), "{k} missing from {bar:?}");
+        }
+        // The digits never reach the bar's row.
+        assert!((0..100).all(|x| g.cell(x, 29).ch != '█'));
+        a.active_at = Some(Instant::now() - FRAME_HIDES);
+        let bar = a.compose(100, 30).row_text(29);
+        assert!(!bar.contains("space"), "keys hide with the frame: {bar:?}");
+    }
+
+    #[test]
+    fn the_form_takes_the_whole_screen() {
+        let mut a = app(1);
+        press(&mut a, KeyCode::Esc);
+        press(&mut a, KeyCode::Char('a'));
+        let g = a.compose(100, 30);
+        assert!(g.find("New clock").is_some());
+        assert!(g.find("C0").is_none(), "the list is not drawn under it");
+        assert!(g.row_text(29).contains("enter start"));
     }
 }

@@ -85,9 +85,11 @@ count() { screen "$1" | grep -o "$2" | wc -l; }
 start multi -t Tea 3m -t Run stopwatch
 check "several clocks show their titles" 'screen multi | grep -q "Tea" && screen multi | grep -q "Run"'
 check "the selection frame starts hidden" '! screen multi | grep -q "╭"'
+check "with nothing selected the bar only says esc" 'screen multi | grep -q "esc list" && ! screen multi | grep -q "space"'
 t send-keys -t smoke:multi l
 sleep 0.3
 check "l moves to the next clock and shows the frame" 'screen multi | grep -q "╭"'
+check "a selected clock shows its keys" 'screen multi | grep -q "space pause" && screen multi | grep -q "esc list"'
 t send-keys -t smoke:multi Space
 sleep 0.3
 check "space pauses only the selected clock" '[[ $(count multi PAUSED) == 1 ]]'
@@ -101,6 +103,15 @@ t send-keys -t smoke:multi q
 sleep 0.4
 check "quitting with a countdown left exits 1" '[[ $(exit_code multi) == 1 ]]'
 check "the stopwatch time still prints" '[[ $(wc -l < "$work/multi.out") == 1 ]]'
+
+start rnd -t Laps rounds
+sleep 0.4
+t send-keys -t smoke:rnd n
+sleep 0.3
+check "n starts the next round" 'screen rnd | grep -q "ROUND 2   AVG"'
+t send-keys -t smoke:rnd q
+sleep 0.4
+check "a rounds clock prints its total" 'grep -Eq "^00:0[0-9]\.[0-9]$" "$work/rnd.out"'
 
 start pair 1s 1s
 sleep 2.2
@@ -131,7 +142,9 @@ t send-keys -t smoke:list a
 sleep 0.2
 t send-keys -t smoke:list -l Tea
 check "a new clock starts as a stopwatch" 'screen list | grep -q "› Name" && ! screen list | grep -q "Time"'
-t send-keys -t smoke:list Tab l Tab
+check "the form previews it in big digits" '[[ $(screen list | grep -c "█") -ge 5 ]]'
+# Up to the type, over to countdown, then down past the name to the time.
+t send-keys -t smoke:list BTab Right Tab Tab
 t send-keys -t smoke:list -l 2m
 t send-keys -t smoke:list Enter
 sleep 0.3
