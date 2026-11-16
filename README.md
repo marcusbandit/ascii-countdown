@@ -3,6 +3,12 @@
 A countdown timer and stopwatch that fills the terminal with big ASCII-art digits.
 One static binary for Linux on x86_64 or aarch64, with no runtime dependencies.
 
+![tock counting down from 25 minutes](docs/countdown.png)
+
+![tock as a stopwatch](docs/stopwatch.png)
+
+![a four second countdown reaching zero and flashing red](docs/flash.gif)
+
 ## Install
 
 ```sh
