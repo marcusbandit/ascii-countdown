@@ -15,7 +15,7 @@ _tock() {
     return 0
   fi
   # Every word that is not an option is another clock.
-  COMPREPLY=($(compgen -W "stopwatch 5m 10m 15m 25m 45m 1h 1h30m 90s" -- "$cur"))
+  COMPREPLY=($(compgen -W "stopwatch rounds 5m 10m 15m 25m 45m 1h 1h30m 90s" -- "$cur"))
   return 0
 }
 

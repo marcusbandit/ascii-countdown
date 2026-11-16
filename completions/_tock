@@ -3,7 +3,10 @@
 
 _tock_clock() {
   local -a modes durations
-  modes=('stopwatch:count up from zero instead of down')
+  modes=(
+    'stopwatch:count up from zero instead of down'
+    'rounds:a stopwatch that times each round and their average'
+  )
   durations=(
     '5m:five minutes'
     '10m:ten minutes'
@@ -26,4 +29,4 @@ _arguments -s -S \
   '--no-bell[flash at zero without ringing the terminal bell]' \
   '(- *)'{-h,--help}'[print help]' \
   '(- *)'{-V,--version}'[print the version]' \
-  '*:duration or stopwatch:_tock_clock'
+  '*:duration, stopwatch or rounds:_tock_clock'

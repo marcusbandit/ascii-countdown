@@ -32,10 +32,20 @@ directory on your zsh `$fpath` and `tock.bash` for
 
 ## Use
 
-Run `tock` on its own to open the clock list. `a` adds a clock: give it a name
-and press Enter for a stopwatch, or switch its type to countdown and type a
-time. Up to four clocks
-are shown at once, and Enter puts them full screen in big digits.
+Run `tock` on its own to open the clock list. `a` opens the new clock screen,
+which previews the clock in big digits as you fill it in. Pick a type:
+
+- **stopwatch** counts up from zero.
+- **countdown** counts down from a time you type, or pick one of the presets
+  with the arrow keys.
+- **rounds** is a stopwatch you split into rounds with `n`. It shows the round
+  you are on and the average round so far.
+
+Set Start to later to add the clock paused, then start it with space when you
+are ready. Up to four clocks are shown at once, and Enter puts them full screen
+in big digits.
+
+![the new clock screen](docs/form.png)
 
 ![the clock list](docs/list.png)
 
@@ -49,6 +59,7 @@ tock 1h30m            # or 90s, 1h2m3s, 45 (seconds)
 tock 10:00            # mm:ss, or h:mm:ss as in 1:30:00
 tock -t "Tea" 4m      # with a title above the clock
 tock stopwatch        # count up from zero, same as tock --up
+tock -t Laps rounds   # a stopwatch that times each round
 tock -t Tea 4m -t Pasta 10m stopwatch   # up to four; each -t names the next
 ```
 
@@ -60,7 +71,9 @@ On the list:
 | enter | full screen, with the selected clock shown |
 | v | show or hide the selected clock |
 | a, e | add a clock, edit the selected one (name, type, time) |
-| space, r, x | pause, reset, cancel the selected clock |
+| space, r, x | start or pause, reset, cancel the selected clock |
+| + - | a minute more or less on a countdown, even one that ended |
+| n | next round, on a rounds clock |
 | P, R | pause or resume all, reset all |
 | q | quit |
 
@@ -69,14 +82,16 @@ Full screen:
 | Key | Does |
 | --- | --- |
 | h j k l, arrows | move between clocks |
-| space, r, x, e | pause, reset, cancel, edit the selected clock |
+| space, r, x, e | start or pause, reset, cancel, edit the selected clock |
+| + - n | a minute more or less, next round |
 | a | add a clock |
 | P, R | pause or resume all, reset all |
 | esc | back to the list |
 | q | quit |
 
-Moving shows a frame around the selected clock. It hides after ten seconds
-without a key, and the keys still act on that clock.
+Any key selects a clock: a frame goes around it and its keys show along the
+bottom. After ten seconds without a key both hide and only esc stays, and the
+keys still act on that clock.
 
 The digits scale to the largest size that fits and re-center when the window
 changes size; a terminal too small for four shows fewer and follows the
@@ -86,7 +101,7 @@ flashes red for four seconds and the terminal bell rings three times
 countdown has hit zero, keys with no job there quit.
 
 `tock` draws on the terminal itself, so stdout is free for scripts. Each
-stopwatch prints the time it stopped at, one line each, and `tock` exits 0
+stopwatch and rounds clock prints the total time it stopped at, one line each, and `tock` exits 0
 only when no countdown was left running:
 
 ```sh

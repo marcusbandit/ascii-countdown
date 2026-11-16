@@ -10,10 +10,12 @@ Usage:
   tock                          open the clock list, add clocks from there
   tock [options] <clock>...     start these clocks and show them
 
-  Each clock is a duration to count down from, or 'stopwatch' to count up:
+  Each clock is a duration to count down from, 'stopwatch' to count up, or
+  'rounds' for a stopwatch that times each round and their average:
 
   tock 25m
   tock -t Tea 4m -t Pasta 10m stopwatch
+  tock -t Laps rounds
 
 Durations:
   25m  1h30m  90s  1h2m3s  10:00 (mm:ss)  1:30:00 (h:mm:ss)  45 (seconds)
@@ -30,18 +32,23 @@ Clock list:
   enter          full screen, with the selected clock shown
   v              show or hide the selected clock; four fit at once
   a  e           add a clock, edit the selected one
-  space  r  x    pause, reset, cancel the selected clock
+  space  r  x    start or pause, reset, cancel the selected clock
+  +  -           a minute more or less on a countdown, even one that ended
+  n              next round, on a rounds clock
   P  R           pause or resume all, reset all
   q              quit
 
 Display:
   h j k l, arrows   move between clocks; the frame hides after 10 s
-  space  r  x  e    pause, reset, cancel, edit the selected clock
+  space  r  x  e    start or pause, reset, cancel, edit the selected clock
+  +  -  n           a minute more or less, next round
+                    the keys show along the bottom while a clock is selected
   P  R              pause or resume all, reset all
   esc               back to the clock list
   q                 quit; once every countdown is done, most keys quit
 
-Stopwatches print the time they stopped at, one line each, in order.
+Stopwatches and rounds clocks print the total time they stopped at, one line
+each, in order.
 Exit status: 0 when no countdown was left running, 1 when one was,
 2 on bad arguments, 130 when interrupted.
 ";
@@ -90,10 +97,10 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String
 
     while let Some(arg) = args.next() {
         if only_positional || !arg.starts_with('-') || arg == "-" {
-            let mode = if arg == "stopwatch" {
-                Mode::Stopwatch
-            } else {
-                Mode::Countdown(duration::parse(&arg)?)
+            let mode = match arg.as_str() {
+                "stopwatch" => Mode::Stopwatch,
+                "rounds" => Mode::Rounds,
+                _ => Mode::Countdown(duration::parse(&arg)?),
             };
             push(&mut clocks, &mut title, mode);
             continue;
@@ -207,6 +214,7 @@ mod tests {
     #[test]
     fn stopwatch_args() {
         assert_eq!(one(&["stopwatch"]).mode, Mode::Stopwatch);
+        assert_eq!(one(&["rounds"]).mode, Mode::Rounds);
         assert_eq!(one(&["--up"]).mode, Mode::Stopwatch);
         let sw = one(&["-u", "-t", "Run"]);
         assert_eq!(

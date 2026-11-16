@@ -18,7 +18,7 @@ pub struct Panel {
     pub title: Option<String>,
     pub face: String,
     pub tone: Tone,
-    pub status: &'static str,
+    pub status: String,
     pub flash: bool,
 }
 
@@ -141,6 +141,7 @@ pub fn fits_big(panels: &[Panel], cols: usize, rows: usize) -> bool {
     plan(panels, area).1.is_some()
 }
 
+#[cfg(test)]
 /// Draws every panel over the whole grid, with a frame around `selected`
 /// when there is more than one. Returns how many panels went in a row.
 pub fn compose(grid: &mut Grid, panels: &[Panel], color: bool, selected: Option<usize>) -> usize {
@@ -150,6 +151,17 @@ pub fn compose(grid: &mut Grid, panels: &[Panel], color: bool, selected: Option<
         w: grid.cols,
         h: grid.rows,
     };
+    compose_in(grid, area, panels, color, selected)
+}
+
+/// The same as `compose`, inside `area` only.
+pub fn compose_in(
+    grid: &mut Grid,
+    area: Rect,
+    panels: &[Panel],
+    color: bool,
+    selected: Option<usize>,
+) -> usize {
     if panels.is_empty() || area.w == 0 || area.h == 0 {
         return 1;
     }
@@ -178,7 +190,7 @@ fn draw_panel(grid: &mut Grid, p: &Panel, r: Rect, scale: Option<Scale>, color: 
         .as_deref()
         .map(|t| truncate(t, text_w))
         .unwrap_or_default();
-    let status = truncate(p.status, text_w);
+    let status = truncate(&p.status, text_w);
 
     let mut block: Vec<Option<(Part, String)>> = Vec::new();
     match scale {
@@ -272,7 +284,7 @@ mod tests {
             title: title.map(str::to_string),
             face: face.to_string(),
             tone: Tone::Normal,
-            status: "",
+            status: String::new(),
             flash: false,
         }
     }
@@ -322,7 +334,7 @@ mod tests {
     #[test]
     fn title_sits_above_digits_and_status_below() {
         let mut p = panel("25:00", Some("Tea"));
-        p.status = "PAUSED";
+        p.status = "PAUSED".into();
         let g = draw(&[p], 80, 24, None);
         let rows = ink_rows(&g, 0, 80);
         assert_eq!(g.find("Tea").unwrap().1, rows[0] - 2);
@@ -333,7 +345,7 @@ mod tests {
     fn digits_do_not_move_when_status_changes() {
         let mut p = panel("25:00", None);
         let before = ink_rows(&draw(&[p.clone()], 80, 24, None), 0, 80);
-        p.status = "PAUSED";
+        p.status = "PAUSED".into();
         assert_eq!(ink_rows(&draw(&[p], 80, 24, None), 0, 80), before);
     }
 
