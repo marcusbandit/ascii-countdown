@@ -8,7 +8,7 @@ use crate::display::{self, Panel, Tone};
 use crate::duration;
 use crate::manager::{self, Key};
 use crate::screen::{truncate, Grid, Ink, Rect, Style};
-use crate::timer::{Mode, Timer};
+use crate::timer::{ClockSpec, Mode, Timer};
 
 /// Longest name the form takes, in characters.
 const NAME_MAX: usize = 40;
@@ -231,36 +231,49 @@ impl Form {
         cols >= MIN_W && rows >= MIN_H
     }
 
-    /// The clock as it will look once saved.
-    fn preview(&self) -> Panel {
-        let face = match self.kind {
-            Kind::Stopwatch | Kind::Rounds => duration::stopwatch_face(Default::default()),
-            Kind::Countdown => match duration::parse(&self.time) {
-                Ok(d) => duration::countdown_face(d.as_secs(), d.as_secs() >= 3600),
-                Err(_) => "--:--".into(),
-            },
-        };
-        let waits = self.target.is_none() && !self.start;
-        let mut status: Vec<&str> = Vec::new();
-        if waits {
-            status.push("PAUSED");
+    /// The mode the fields describe, or `None` while the time does not parse.
+    fn mode(&self) -> Option<Mode> {
+        match self.kind {
+            Kind::Stopwatch => Some(Mode::Stopwatch),
+            Kind::Rounds => Some(Mode::Rounds),
+            Kind::Countdown => duration::parse(&self.time).ok().map(Mode::Countdown),
         }
-        if self.kind == Kind::Rounds {
-            status.push("ROUND 1");
-        }
+    }
+
+    /// The clock as it will look once saved: `editing` itself while its type
+    /// and time are unchanged, otherwise a fresh clock drawn the way the
+    /// list and full screen view draw one.
+    fn preview(&self, editing: Option<&Timer>) -> Panel {
         let name = self.name.trim();
-        Panel {
-            title: (!name.is_empty()).then(|| name.to_string()),
-            face,
-            tone: if waits { Tone::Paused } else { Tone::Normal },
-            status: status.join("   "),
-            flash: false,
+        let title = (!name.is_empty()).then(|| name.to_string());
+        let mode = self.mode();
+        if let Some(t) = editing.filter(|t| Some(t.mode) == mode) {
+            return Panel { title, ..t.panel() };
         }
+        let mut t = Timer::new(
+            ClockSpec {
+                mode: mode.unwrap_or(Mode::Countdown(Default::default())),
+                title: title.clone(),
+            },
+            false,
+        );
+        // Saving starts a new clock unless it waits; an edited one that was
+        // waiting keeps waiting.
+        let waits = editing.map_or(!self.start, Timer::is_paused);
+        if waits {
+            t.clock.stop_at(Default::default());
+        }
+        let mut p = t.panel();
+        if mode.is_none() {
+            p.face = "--:--".into();
+            p.tone = if waits { Tone::Paused } else { Tone::Normal };
+        }
+        p
     }
 
     /// Draws the form over the whole of `grid`: the preview on top, the
     /// fields under it. The key bar on the last row is the caller's.
-    pub fn draw(&self, grid: &mut Grid, color: bool) {
+    pub fn draw(&self, grid: &mut Grid, color: bool, editing: Option<&Timer>) {
         let (cols, rows) = (grid.cols, grid.rows);
         if !Form::fits(cols, rows) {
             return;
@@ -288,7 +301,7 @@ impl Form {
             h: y0.saturating_sub(4),
         };
         if preview.h >= PREVIEW_MIN {
-            display::compose_in(grid, preview, &[self.preview()], color, None);
+            display::compose_in(grid, preview, &[self.preview(editing)], color, None);
         }
 
         // Labels line up with the heading and the key bar; the pointer for the
@@ -416,7 +429,6 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timer::ClockSpec;
     use std::time::Duration;
 
     fn press(f: &mut Form, code: KeyCode) -> FormEvent {
@@ -524,7 +536,7 @@ mod tests {
         assert_eq!(f.keys()[0], ("enter", "start"));
         press(&mut f, KeyCode::Char(' '));
         assert_eq!(f.keys()[0], ("enter", "add"));
-        assert_eq!(f.preview().tone, Tone::Paused);
+        assert_eq!(f.preview(None).tone, Tone::Paused);
         assert_eq!(
             press(&mut f, KeyCode::Enter),
             FormEvent::Save {
@@ -565,14 +577,14 @@ mod tests {
     fn the_preview_shows_the_clock_as_it_will_look() {
         let mut f = Form::new_clock();
         typed(&mut f, "Tea");
-        assert_eq!(f.preview().face, "00:00.0");
-        assert_eq!(f.preview().title.as_deref(), Some("Tea"));
+        assert_eq!(f.preview(None).face, "00:00.0");
+        assert_eq!(f.preview(None).title.as_deref(), Some("Tea"));
         countdown(&mut f);
-        assert_eq!(f.preview().face, "--:--");
+        assert_eq!(f.preview(None).face, "--:--");
         typed(&mut f, "4m");
-        assert_eq!(f.preview().face, "04:00");
+        assert_eq!(f.preview(None).face, "04:00");
         let mut g = Grid::new(100, 30);
-        f.draw(&mut g, true);
+        f.draw(&mut g, true, None);
         assert!(g.find("New clock").is_some());
         assert!(g.find("Tea").is_some());
         assert!(g.find("█").is_some(), "the preview is in big digits");
@@ -580,13 +592,13 @@ mod tests {
         assert!(g.find(" 25m ").is_some());
         // A short screen drops the preview but keeps every field.
         let mut g = Grid::new(60, 14);
-        f.draw(&mut g, true);
+        f.draw(&mut g, true, None);
         assert!(g.find("█").is_none());
         assert!(g.find("Start").is_some());
         // A screen too small for it is left alone rather than overrun.
         assert!(!Form::fits(MIN_W - 1, 20));
         let mut tiny = Grid::new(MIN_W - 1, 20);
-        f.draw(&mut tiny, true);
+        f.draw(&mut tiny, true, None);
         assert!(tiny.find("New").is_none());
     }
 
@@ -594,15 +606,33 @@ mod tests {
     fn the_narrowest_form_shows_every_type_and_ends_a_long_error_plainly() {
         let mut f = Form::new_clock();
         let mut g = Grid::new(MIN_W, MIN_H);
-        f.draw(&mut g, true);
+        f.draw(&mut g, true, None);
         assert!(g.find("stopwatch countdown rounds").is_some());
         countdown(&mut f);
         typed(&mut f, "abcdefghijklmnopqrstuvwxyz");
         press(&mut f, KeyCode::Enter);
         let mut g = Grid::new(MIN_W, MIN_H);
-        f.draw(&mut g, true);
+        f.draw(&mut g, true, None);
         assert!(g.find("…").is_some());
         assert_eq!(wrap("日本 語", 4), vec!["日本", "語"]);
         assert_eq!(wrap("aa bb cc", 5), vec!["aa bb", "cc"]);
+    }
+
+    #[test]
+    fn editing_previews_the_clock_itself_until_its_time_changes() {
+        let mut t = timer(Mode::Stopwatch);
+        t.clock.stop_at(Duration::from_millis(754_500));
+        let mut f = Form::edit(0, &t);
+        typed(&mut f, "Run");
+        let p = f.preview(Some(&t));
+        assert_eq!((p.face.as_str(), p.tone), ("12:34.5", Tone::Paused));
+        assert_eq!(p.title.as_deref(), Some("Run"));
+        // Another type starts over, and a waiting clock keeps waiting.
+        f.kind = Kind::Rounds;
+        let p = f.preview(Some(&t));
+        assert_eq!(
+            (p.face.as_str(), p.status.as_str()),
+            ("00:00.0", "PAUSED   ROUND 1")
+        );
     }
 }

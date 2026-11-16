@@ -47,7 +47,8 @@ Display:
   esc               back to the clock list
   q                 quit; once every countdown is done, most keys quit
 
-Stopwatches print the time they stopped at, one line each, in order.
+Stopwatches and rounds clocks print the total time they stopped at, one line
+each, in order.
 Exit status: 0 when no countdown was left running, 1 when one was,
 2 on bad arguments, 130 when interrupted.
 ";

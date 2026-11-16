@@ -202,8 +202,14 @@ impl App {
             Some(t) => {
                 t.title = spec.title;
                 if t.mode != spec.mode {
+                    // A new time starts over, but a clock that was waiting
+                    // keeps waiting.
+                    let waiting = t.is_paused();
                     t.mode = spec.mode;
                     t.restart();
+                    if waiting {
+                        t.clock.stop_at(Duration::ZERO);
+                    }
                 }
             }
             None => {
@@ -347,7 +353,7 @@ impl App {
         if self.quick && self.all_done() {
             let keeps = matches!(
                 key.code,
-                KeyCode::Char('r' | 'R' | 'e' | 'x' | 'a' | '+' | '=')
+                KeyCode::Char('r' | 'R' | 'e' | 'x' | 'a' | '+' | '=' | '-' | '_' | 'n')
                     | KeyCode::Delete
                     | KeyCode::Enter
             );
@@ -402,7 +408,10 @@ impl App {
         // under it the view stays, with the form's keys to close it.
         let form_fits = Form::fits(cols, rows);
         match (&self.form, self.view) {
-            (Some(form), _) if form_fits => form.draw(&mut grid, self.color),
+            (Some(form), _) if form_fits => {
+                let editing = form.target.and_then(|i| self.timers.get(i));
+                form.draw(&mut grid, self.color, editing);
+            }
             (_, View::List) => {
                 let note = self.note.as_ref().map(|(n, _)| n.as_str());
                 self.list_top = manager::compose(
@@ -428,7 +437,7 @@ impl App {
                     let keys = manager::keys(self.timers.get(self.sel));
                     manager::toolbar(&mut grid, y, &keys, self.color);
                 }
-                View::Display if self.display_bar(rows) => {
+                View::Display if display_bar(cols, rows) => {
                     let keys = manager::display_keys(
                         self.timers.get(self.sel),
                         self.frame_visible(),
@@ -442,12 +451,6 @@ impl App {
         grid
     }
 
-    /// Whether the full screen view keeps its last row for the key bar. A
-    /// short terminal gives every row to the digits.
-    fn display_bar(&self, rows: usize) -> bool {
-        rows >= 8
-    }
-
     fn compose_display(&mut self, grid: &mut Grid) {
         // The key bar's row is kept even while it only says esc, so the
         // digits do not move when the keys come and go.
@@ -455,7 +458,7 @@ impl App {
             x: 0,
             y: 0,
             w: grid.cols,
-            h: grid.rows - usize::from(self.display_bar(grid.rows)),
+            h: grid.rows - usize::from(display_bar(grid.cols, grid.rows)),
         };
         let shown = self.shown();
         if !shown.contains(&self.sel) {
@@ -490,6 +493,12 @@ impl App {
         self.per_row =
             display::compose_in(grid, area, &panels[start..start + k], self.color, selected);
     }
+}
+
+/// Whether the full screen view keeps its last row for the key bar: only
+/// when the bar fits, and a short terminal gives every row to the digits.
+fn display_bar(cols: usize, rows: usize) -> bool {
+    rows >= 8 && cols >= 10
 }
 
 #[cfg(test)]
@@ -832,5 +841,19 @@ mod tests {
         assert!(g.find("New clock").is_some());
         assert!(g.find("C0").is_none(), "the list is not drawn under it");
         assert!(g.row_text(29).contains("enter start"));
+    }
+
+    #[test]
+    fn a_new_time_for_a_waiting_clock_keeps_it_waiting() {
+        let mut a = app(1);
+        a.timers[0].clock.stop_at(Duration::from_secs(30));
+        press(&mut a, KeyCode::Char('e'));
+        press(&mut a, KeyCode::Tab);
+        a.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        typed(&mut a, "30m");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.timers[0].mode, Mode::Countdown(Duration::from_secs(1800)));
+        assert!(a.timers[0].is_paused());
+        assert_eq!(a.timers[0].clock.elapsed(), Duration::ZERO);
     }
 }

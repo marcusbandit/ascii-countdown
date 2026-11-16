@@ -155,13 +155,16 @@ impl Timer {
         };
         let elapsed = self.clock.elapsed();
         if more {
-            self.mode = Mode::Countdown(total + by);
+            let max = Duration::from_secs(duration::MAX_SECS);
+            self.mode = Mode::Countdown((total + by).min(max).max(total));
             if self.done_at.take().is_some() {
                 self.bells_rung = 0;
                 self.clock.toggle();
             }
         } else if !self.is_done() {
-            let floor = elapsed + Duration::from_secs(1);
+            // Whole seconds, so the total still reads back exactly in the
+            // edit form and an unchanged edit is not taken for a new time.
+            let floor = Duration::from_secs(elapsed.as_secs() + 1);
             self.mode = Mode::Countdown(total.saturating_sub(by).max(floor).min(total));
         }
     }
@@ -450,5 +453,19 @@ mod tests {
         // Plus is for countdowns only.
         t.adjust(STEP, true);
         assert_eq!(t.mode, Mode::Rounds);
+    }
+
+    #[test]
+    fn minus_leaves_a_whole_second_total_and_plus_stops_at_the_maximum() {
+        let mut t = countdown(120_000);
+        t.clock.stop_at(Duration::from_millis(70_300));
+        t.adjust(STEP, false);
+        assert_eq!(t.mode, Mode::Countdown(Duration::from_secs(71)));
+        let mut t = countdown(duration::MAX_SECS * 1000 - 30_000);
+        t.adjust(STEP, true);
+        assert_eq!(
+            t.mode,
+            Mode::Countdown(Duration::from_secs(duration::MAX_SECS))
+        );
     }
 }

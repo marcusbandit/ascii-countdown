@@ -1,5 +1,7 @@
 //! The main view: every clock in a list, with keys to manage them.
 
+use std::borrow::Cow;
+
 use unicode_width::UnicodeWidthStr;
 
 use crate::display::{flash_style, tone_style, Tone};
@@ -138,7 +140,7 @@ pub fn compose(
     };
 
     // From the right: the status, the time, and the name takes the rest.
-    let status_w = "time's up".len();
+    let status_w = "paused, round 99".len();
     let status_end = right - 1;
     let time_end = status_end.saturating_sub(status_w + 2);
     let name_x = x0 + 4;
@@ -179,25 +181,24 @@ pub fn compose(
             face_style,
             time_end,
         );
-        let round = format!("round {}", t.round());
-        let (status, status_style) = match (t.state(), t.mode) {
-            (State::Running, Mode::Rounds) => (round.as_str(), base),
-            (State::Running, _) => ("", base),
-            (State::Paused, _) => ("paused", base),
-            (State::Done, _) if plain => ("time's up", base.bold()),
-            _ => (
-                "time's up",
-                if color {
-                    Style::fg(Ink::Red).bold()
-                } else {
-                    base.bold()
-                },
-            ),
+        // Only a rounds clock builds a string; the rest are fixed words.
+        let status: Cow<str> = match (t.state(), t.mode) {
+            (State::Done, _) => "time's up".into(),
+            (State::Paused, Mode::Rounds) => format!("paused, round {}", t.round()).into(),
+            (State::Paused, _) => "paused".into(),
+            (State::Running, Mode::Rounds) => format!("round {}", t.round()).into(),
+            (State::Running, _) => "".into(),
+        };
+        let status_style = match t.state() {
+            State::Done if plain => base.bold(),
+            State::Done if color => Style::fg(Ink::Red).bold(),
+            State::Done => base.bold(),
+            _ => base,
         };
         grid.put(
             status_end.saturating_sub(status.width()),
             y,
-            status,
+            &status,
             status_style,
             status_end,
         );
