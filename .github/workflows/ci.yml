@@ -1,9 +1,12 @@
 name: CI
 
 on:
+  # A change to docs alone builds and tests nothing, so it runs nothing.
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
 
 permissions:
   contents: read
