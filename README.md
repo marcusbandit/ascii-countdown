@@ -17,12 +17,17 @@ curl -fsSL https://raw.githubusercontent.com/marcusbandit/ascii-countdown/main/i
 
 [install.sh](install.sh) picks the build for your CPU, checks its sha256 and puts
 `tock` in `~/.local/bin`, with zsh and bash completion under `~/.local/share`.
-Set `TOCK_BIN_DIR` to install somewhere else, or `TOCK_VERSION=v0.1.0` to pin a
+Set `TOCK_BIN_DIR` to install somewhere else, or `TOCK_VERSION=0.1.0` to pin a
 release: `curl -fsSL .../install.sh | TOCK_VERSION=v0.1.0 sh`.
+
+zsh only loads that completion when `~/.local/share/zsh/site-functions` is on
+`$fpath` before `compinit` runs.
 
 Without the script, grab the tarball for your machine from the
 [releases page](https://github.com/marcusbandit/ascii-countdown/releases) and
-copy `tock` onto your `PATH`.
+copy `tock` onto your `PATH`. Its `completions/` folder holds `_tock` for a
+directory on your zsh `$fpath` and `tock.bash` for
+`~/.local/share/bash-completion/completions/tock`.
 
 ## Use
 

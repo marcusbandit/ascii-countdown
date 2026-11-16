@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The checks are strings run by eval, so single quotes are on purpose.
-# shellcheck disable=SC2016,SC2034
+# shellcheck disable=SC2016
 # End-to-end check: runs tock in a headless tmux, presses keys, and checks what
 # the screen shows, the exit codes, and that the terminal is put back.
 #
@@ -86,6 +86,7 @@ sleep 0.4
 check "a resize to a small window still shows the time" 'screen small | grep -q "25:00\|24:59\|█"'
 t send-keys -t smoke:small q
 
+# shellcheck disable=SC2034 # read by the eval in check
 "$bin" 5x 2>/dev/null && rc=0 || rc=$?
 check "a bad duration exits 2" '[[ $rc == 2 ]]'
 
