@@ -56,7 +56,7 @@ sleep 1.2
 check "zero shows TIME'S UP" "screen fin | grep -q \"TIME'S UP\""
 # tock ignores keys for 600 ms after zero; wait well past that.
 sleep 1
-t send-keys -t smoke:fin x
+t send-keys -t smoke:fin z
 sleep 0.4
 check "any key quits a finished countdown with 0" '[[ $(exit_code fin) == 0 ]]'
 
@@ -83,16 +83,20 @@ check "SIGTERM exits 130" '[[ $(exit_code term) == 130 ]]'
 count() { screen "$1" | grep -o "$2" | wc -l; }
 
 start multi -t Tea 3m -t Run stopwatch
-check "several clocks show their numbers and titles" 'screen multi | grep -q "1  Tea" && screen multi | grep -q "2  Run"'
-t send-keys -t smoke:multi 2
+check "several clocks show their titles" 'screen multi | grep -q "Tea" && screen multi | grep -q "Run"'
+check "the selection frame starts hidden" '! screen multi | grep -q "╭"'
+t send-keys -t smoke:multi l
 sleep 0.3
-check "a number key pauses only that clock" '[[ $(count multi PAUSED) == 1 ]]'
+check "l moves to the next clock and shows the frame" 'screen multi | grep -q "╭"'
 t send-keys -t smoke:multi Space
 sleep 0.3
-check "space then pauses every clock" '[[ $(count multi PAUSED) == 2 ]]'
-t send-keys -t smoke:multi Space
+check "space pauses only the selected clock" '[[ $(count multi PAUSED) == 1 ]]'
+t send-keys -t smoke:multi P
 sleep 0.3
-check "space again resumes every clock" '[[ $(count multi PAUSED) == 0 ]]'
+check "P then pauses every clock" '[[ $(count multi PAUSED) == 2 ]]'
+t send-keys -t smoke:multi P
+sleep 0.3
+check "P again resumes every clock" '[[ $(count multi PAUSED) == 0 ]]'
 t send-keys -t smoke:multi q
 sleep 0.4
 check "quitting with a countdown left exits 1" '[[ $(exit_code multi) == 1 ]]'
@@ -101,25 +105,55 @@ check "the stopwatch time still prints" '[[ $(wc -l < "$work/multi.out") == 1 ]]
 start pair 1s 1s
 sleep 2.2
 check "two finished clocks both show TIME'S UP" "[[ \$(count pair \"TIME'S UP\") == 2 ]]"
-t send-keys -t smoke:pair x
+t send-keys -t smoke:pair z
 sleep 0.4
 check "any key quits once every clock finished" '[[ $(exit_code pair) == 0 ]]'
 
 start again 1s 1s
 sleep 2.2
-t send-keys -t smoke:again r
+t send-keys -t smoke:again R
 sleep 0.4
-check "r starts finished clocks over instead of quitting" "[[ -z \$(exit_code again) ]] && [[ \$(count again \"TIME'S UP\") == 0 ]]"
+check "R starts finished clocks over instead of quitting" "[[ -z \$(exit_code again) ]] && [[ \$(count again \"TIME'S UP\") == 0 ]]"
 t send-keys -t smoke:again q
 
 start mixed 1s 5m
 sleep 2.2
-t send-keys -t smoke:mixed x
+t send-keys -t smoke:mixed z
 sleep 0.4
 check "a key does not quit while another clock runs" '[[ -z $(exit_code mixed) ]]'
 t send-keys -t smoke:mixed q
 sleep 0.4
 check "q quits it with 1" '[[ $(exit_code mixed) == 1 ]]'
+
+start list
+check "no arguments opens the clock list" 'screen list | grep -q "No clocks"'
+t send-keys -t smoke:list a
+sleep 0.2
+t send-keys -t smoke:list -l Tea
+t send-keys -t smoke:list Tab Tab
+t send-keys -t smoke:list -l 2m
+t send-keys -t smoke:list Enter
+sleep 0.3
+check "a adds a clock through the form" 'screen list | grep -q "Tea" && screen list | grep -Eq "0[12]:[0-9]{2}"'
+t send-keys -t smoke:list Enter
+sleep 0.3
+check "enter shows it in big digits" '[[ $(screen list | grep -c "█") -ge 5 ]]'
+t send-keys -t smoke:list Escape
+sleep 0.3
+check "esc goes back to the list" 'screen list | grep -q "1 clock"'
+t send-keys -t smoke:list e
+sleep 0.2
+t send-keys -t smoke:list BSpace BSpace BSpace
+t send-keys -t smoke:list -l Kettle
+t send-keys -t smoke:list Enter
+sleep 0.3
+check "e renames it" 'screen list | grep -q "Kettle" && ! screen list | grep -q "Tea"'
+t send-keys -t smoke:list x
+sleep 0.3
+check "x cancels it" 'screen list | grep -q "No clocks"'
+t send-keys -t smoke:list q
+sleep 0.4
+check "q quits the list with 0 when nothing runs" '[[ $(exit_code list) == 0 ]]'
 
 start small 25m
 t resize-window -t smoke:small -x 30 -y 8

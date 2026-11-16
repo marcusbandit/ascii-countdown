@@ -88,6 +88,23 @@ fn number(s: &str) -> Option<u64> {
     s.parse().ok()
 }
 
+/// The shortest unit form of `d`, the way it would be typed: `25m`, `1h30m`, `90s`.
+pub fn compact(d: Duration) -> String {
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    let mut out = String::new();
+    if h > 0 {
+        out += &format!("{h}h");
+    }
+    if m > 0 {
+        out += &format!("{m}m");
+    }
+    if s > 0 || out.is_empty() {
+        out += &format!("{s}s");
+    }
+    out
+}
+
 /// Seconds left on a countdown as shown: rounded up, so a fresh 25m timer reads
 /// 25:00 and 00:00 appears only when the time is really up.
 pub fn remaining_secs(total: Duration, elapsed: Duration) -> u64 {
@@ -181,6 +198,20 @@ mod tests {
         assert_eq!(remaining_secs(total, Duration::from_millis(59_001)), 1);
         assert_eq!(remaining_secs(total, Duration::from_secs(60)), 0);
         assert_eq!(remaining_secs(total, Duration::from_secs(61)), 0);
+    }
+
+    #[test]
+    fn compact_round_trips() {
+        for (secs, text) in [
+            (1500, "25m"),
+            (5400, "1h30m"),
+            (90, "1m30s"),
+            (3723, "1h2m3s"),
+            (7200, "2h"),
+        ] {
+            assert_eq!(compact(Duration::from_secs(secs)), text);
+            assert_eq!(parse(text).unwrap().as_secs(), secs);
+        }
     }
 
     #[test]
