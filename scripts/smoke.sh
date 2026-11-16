@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# The checks are strings run by eval, so single quotes are on purpose.
+# shellcheck disable=SC2016,SC2034
 # End-to-end check: runs tock in a headless tmux, presses keys, and checks what
 # the screen shows, the exit codes, and that the terminal is put back.
 #
@@ -49,14 +51,14 @@ sleep 0.4
 check "q leaves the alternate screen and shows the cursor" '[[ $(flags cd) == "0 1" ]]'
 check "quitting a countdown early exits 1" '[[ $(exit_code cd) == 1 ]]'
 
-start done 1s
+start fin 1s
 sleep 1.2
-check "zero shows TIME'S UP" "screen done | grep -q \"TIME'S UP\""
+check "zero shows TIME'S UP" "screen fin | grep -q \"TIME'S UP\""
 # tock ignores keys for 600 ms after zero; wait well past that.
 sleep 1
-t send-keys -t smoke:done x
+t send-keys -t smoke:fin x
 sleep 0.4
-check "any key quits a finished countdown with 0" '[[ $(exit_code done) == 0 ]]'
+check "any key quits a finished countdown with 0" '[[ $(exit_code fin) == 0 ]]'
 
 start sw stopwatch
 sleep 1.2
