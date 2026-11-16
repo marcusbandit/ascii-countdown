@@ -136,8 +136,9 @@ pub fn compose(
         } else {
             tone_style(base, t.tone(), color)
         };
-        // Dark grey on the selected row's dark grey would hide a paused time.
-        if selected && color && face_style.fg == Some(Ink::DarkGrey) {
+        // Text in its row's own background colour would vanish, as a paused
+        // time did on the selected row.
+        if face_style.fg.is_some() && face_style.fg == base.bg {
             face_style.fg = Some(Ink::Grey);
         }
         grid.put(
@@ -226,13 +227,20 @@ mod tests {
         compose(&mut g, &timers, 0, 0, None, true);
         for name in ["Tea", "Pasta"] {
             let (_, y) = g.find(name).unwrap();
-            let x = g.row_text(y).find("paused").unwrap();
-            let cell = g.cell(x, y);
-            assert_ne!(
-                cell.style.fg, cell.style.bg,
-                "{name}: text matches its background"
-            );
+            let row = g.row_text(y);
+            for word in ["04:00", "10:00", "paused"] {
+                if let Some(x) = row.find(word) {
+                    let cell = g.cell(x, y);
+                    assert_ne!(
+                        cell.style.fg, cell.style.bg,
+                        "{name}: {word} hides in its row"
+                    );
+                }
+            }
         }
+        // The selected row is the one that had the problem.
+        let tea_y = g.find("Tea").unwrap().1;
+        assert_eq!(g.cell(1, tea_y).style.bg, Some(Ink::DarkGrey));
     }
 
     #[test]
