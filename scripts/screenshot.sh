@@ -28,7 +28,8 @@ lk() { t send-keys -t list "$@"; sleep 0.15; }
 add() {
   lk a
   lk -l "$1"
-  if [[ $2 == stopwatch ]]; then lk Tab l; else lk Tab Tab; lk -l "$2"; fi
+  # A new clock starts as a stopwatch; a countdown switches type, then takes a time.
+  if [[ $2 != stopwatch ]]; then lk Tab l Tab; lk -l "$2"; fi
   lk Enter
 }
 

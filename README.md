@@ -32,13 +32,14 @@ directory on your zsh `$fpath` and `tock.bash` for
 
 ## Use
 
-Run `tock` on its own to open the clock list. `a` adds a clock: give it a name,
-pick countdown or stopwatch, type a time. Up to four clocks go on display, and
-Enter shows them in big digits.
+Run `tock` on its own to open the clock list. `a` adds a clock: give it a name
+and press Enter for a stopwatch, or switch its type to countdown and type a
+time. Up to four clocks
+are shown at once, and Enter puts them full screen in big digits.
 
 ![the clock list](docs/list.png)
 
-![four clocks on display, one selected](docs/multi.png)
+![four clocks full screen, one selected](docs/multi.png)
 
 Or start clocks straight from the command line, which skips the list:
 
@@ -56,14 +57,14 @@ On the list:
 | Key | Does |
 | --- | --- |
 | j k, arrows | move |
-| enter | show the display |
-| v | put a clock on display or take it off |
+| enter | full screen |
+| v | show or hide the selected clock |
 | a, e | add a clock, edit the selected one (name, type, time) |
 | space, r, x | pause, reset, cancel the selected clock |
 | P, R | pause or resume all, reset all |
 | q | quit |
 
-On the display:
+Full screen:
 
 | Key | Does |
 | --- | --- |

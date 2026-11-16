@@ -242,9 +242,10 @@ pub fn flash_style(flash: bool, color: bool) -> Style {
 pub fn tone_style(mut s: Style, tone: Tone, color: bool) -> Style {
     match (tone, color) {
         (Tone::Normal, _) => {}
-        (Tone::Paused, true) => s.fg = Some(Ink::DarkGrey),
+        // The terminal's own faint text, not a grey picked from its palette:
+        // bright black is the background colour in some themes.
+        (Tone::Paused, _) => s.dim = true,
         (Tone::Warn, true) => s.fg = Some(Ink::Red),
-        (Tone::Paused, false) => s.dim = true,
         (Tone::Warn, false) => s.bold = true,
     }
     s
@@ -255,7 +256,8 @@ fn part_style(p: &Panel, part: Part, color: bool) -> Style {
     if part != Part::Face {
         s.bold = true;
     }
-    if p.flash || part == Part::Title {
+    // The word PAUSED stays at full strength; only the digits fade.
+    if p.flash || part == Part::Title || (part == Part::Status && p.tone == Tone::Paused) {
         return s;
     }
     tone_style(s, p.tone, color)

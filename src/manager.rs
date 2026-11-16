@@ -6,17 +6,36 @@ use crate::display::{flash_style, tone_style};
 use crate::screen::{truncate, Grid, Ink, Rect, Style};
 use crate::timer::Timer;
 
-/// The keys shown along the bottom, as a toolbar.
-const KEYS: [(&str, &str); 8] = [
-    ("a", "add"),
-    ("e", "edit"),
-    ("space", "pause"),
-    ("r", "reset"),
-    ("x", "cancel"),
-    ("v", "display"),
-    ("enter", "show"),
-    ("q", "quit"),
-];
+/// The list never grows wider than this, so a name and its time stay close.
+const MAX_W: usize = 72;
+
+/// A key and what it does, for the bar along the bottom.
+pub type Key = (&'static str, &'static str);
+
+/// Where the list sits: its left column and width on a `cols` wide screen.
+pub fn column(cols: usize) -> (usize, usize) {
+    let w = cols.saturating_sub(4).min(MAX_W);
+    ((cols - w) / 2, w)
+}
+
+/// The keys that do something on the list right now, for the clock `t` the
+/// selection is on.
+pub fn keys(t: Option<&Timer>) -> Vec<Key> {
+    let Some(t) = t else {
+        return vec![("a", "add"), ("q", "quit")];
+    };
+    // Most used first: a narrow bar drops keys from the end, but keeps quit.
+    vec![
+        ("a", "add"),
+        ("enter", "full screen"),
+        ("space", if t.is_paused() { "resume" } else { "pause" }),
+        ("e", "edit"),
+        ("v", if t.shown { "hide" } else { "show" }),
+        ("r", "reset"),
+        ("x", "cancel"),
+        ("q", "quit"),
+    ]
+}
 
 /// Draws the list. `top` is the first row scrolled into view; the return value
 /// is the `top` that keeps `sel` visible, to pass back next frame.
@@ -42,28 +61,36 @@ pub fn compose(
         return top;
     }
     let accent = Style::accent(color);
-    let dim = Style {
-        dim: true,
-        ..Style::default()
-    };
+    let (x0, w) = column(cols);
+    let right = x0 + w;
+    // A row of air above the header once there is room for it.
+    let head_y = usize::from(rows >= 12);
 
-    grid.put(2, 0, "tock", accent, cols);
-    let count = match timers.len() {
-        1 => "1 clock".to_string(),
-        n => format!("{n} clocks"),
-    };
-    grid.put(cols.saturating_sub(count.width() + 2), 0, &count, dim, cols);
+    grid.put(x0 + 1, head_y, "tock", accent, right);
+    let shown = timers.iter().filter(|t| t.shown).count();
+    if shown > 0 {
+        let text = format!("{shown} shown");
+        let x = right.saturating_sub(text.width() + 1);
+        grid.put(x.saturating_sub(2), head_y, "●", accent, right);
+        grid.put(x, head_y, &text, Style::default(), right);
+    }
 
-    // Rows 2 to rows-3 hold the list; the last two hold a note and the keys.
+    // The list runs from under the header to above the note and the keys.
     let list = Rect {
-        x: 0,
-        y: 2,
-        w: cols,
-        h: rows.saturating_sub(4),
+        x: x0,
+        y: head_y + 2,
+        w,
+        h: rows.saturating_sub(head_y + 2 + 3),
     };
     if timers.is_empty() {
         let text = "No clocks";
-        grid.put((cols - text.width()) / 2, rows / 2 - 1, text, dim, cols);
+        grid.put(
+            (cols - text.width()) / 2,
+            rows / 2 - 1,
+            text,
+            Style::default().bold(),
+            cols,
+        );
     }
     let top = if sel < top {
         sel
@@ -73,112 +100,106 @@ pub fn compose(
         top
     };
 
-    // Columns, from the right: status, time, then the name takes the rest.
-    let status_w = 9;
-    let time_w = 9;
-    let status_x = cols.saturating_sub(status_w + 2);
-    let time_x = status_x.saturating_sub(time_w + 2);
-    let name_x = 6;
+    // From the right: the status, the time, and the name takes the rest.
+    let status_w = "time's up".len();
+    let status_end = right - 1;
+    let time_end = status_end.saturating_sub(status_w + 2);
+    let name_x = x0 + 4;
 
     for (row, (i, t)) in timers.iter().enumerate().skip(top).take(list.h).enumerate() {
         let y = list.y + row;
         let selected = i == sel;
-        let mut base = flash_style(t.flashing(), color);
-        if selected && !t.flashing() {
-            base = if color {
-                Style {
-                    bg: Some(Ink::DarkGrey),
-                    fg: Some(Ink::White),
-                    ..Style::default()
-                }
-            } else {
-                Style {
-                    reverse: true,
-                    ..Style::default()
-                }
-            };
-        }
-        grid.fill(
-            Rect {
-                x: 1,
-                y,
-                w: cols - 2,
-                h: 1,
-            },
-            base,
-        );
-        if t.shown {
-            let mark = if t.flashing() {
-                base
-            } else {
-                Style {
-                    bg: base.bg,
-                    reverse: base.reverse,
-                    ..accent
-                }
-            };
-            grid.put(3, y, "●", mark, cols);
-        }
-        let name = truncate(&t.label(), time_x.saturating_sub(name_x + 1));
-        let name_style = if t.title.is_some() {
-            base.bold()
+        // The selection swaps the terminal's own colours, which reads in every
+        // theme. On that row everything takes the plain swapped colours.
+        let base = if t.flashing() {
+            flash_style(true, color)
+        } else if selected {
+            Style::default().reversed()
         } else {
-            Style {
-                dim: !selected,
-                ..base
-            }
+            Style::default()
         };
-        grid.put(name_x, y, &name, name_style, time_x);
+        let plain = t.flashing() || selected;
+        grid.fill(Rect { y, h: 1, ..list }, base);
+        if t.shown {
+            grid.put(x0 + 2, y, "●", if plain { base } else { accent }, right);
+        }
+        let name = truncate(&t.label(), time_end.saturating_sub(name_x + 10));
+        let name_style = if t.title.is_some() { base.bold() } else { base };
+        grid.put(name_x, y, &name, name_style, time_end);
 
         let face = t.face();
-        let mut face_style = if t.flashing() {
+        let face_style = if plain {
             base
         } else {
             tone_style(base, t.tone(), color)
         };
-        // Text in its row's own background colour would vanish, as a paused
-        // time did on the selected row.
-        if face_style.fg.is_some() && face_style.fg == base.bg {
-            face_style.fg = Some(Ink::Grey);
-        }
         grid.put(
-            time_x + time_w - face.width().min(time_w),
+            time_end.saturating_sub(face.width()),
             y,
             &face,
             face_style,
-            status_x,
+            time_end,
         );
-        let status = match t.status() {
-            "" => "running",
-            "PAUSED" => "paused",
-            _ => "time's up",
+        let (status, status_style) = match t.status() {
+            "" => ("", base),
+            "PAUSED" => ("paused", base),
+            _ if plain => ("time's up", base.bold()),
+            _ => (
+                "time's up",
+                if color {
+                    Style::fg(Ink::Red).bold()
+                } else {
+                    base.bold()
+                },
+            ),
         };
-        grid.put(status_x, y, status, face_style, cols - 1);
+        grid.put(
+            status_end - status.width(),
+            y,
+            status,
+            status_style,
+            status_end,
+        );
     }
 
     if let Some(n) = note {
-        let style = if color {
-            Style::fg(Ink::Yellow)
-        } else {
-            Style::default().bold()
-        };
-        grid.put(2, rows - 2, &truncate(n, cols - 4), style, cols);
+        grid.put(
+            x0 + 1,
+            rows - 3,
+            &truncate(n, w - 2),
+            Style::default().bold(),
+            right,
+        );
     }
-    toolbar(grid, rows - 1, &KEYS);
     top
 }
 
-/// Key chips in a row: the key reversed, then what it does.
-pub fn toolbar(grid: &mut Grid, y: usize, keys: &[(&str, &str)]) {
-    let key_style = Style::default().bold().reversed();
-    let mut x = 2;
-    for (k, what) in keys {
-        let chip = format!(" {k} ");
-        if x + chip.width() + 1 + what.width() > grid.cols.saturating_sub(1) {
-            break;
-        }
-        x = grid.put(x, y, &chip, key_style, grid.cols);
-        x = grid.put(x + 1, y, what, Style::default(), grid.cols) + 2;
+/// The key bar: each key in the accent, then what it does. It starts at the
+/// list's left edge and may run past its right one. Keys that do not fit are
+/// dropped from the end, except the last, which is how to quit.
+pub fn toolbar(grid: &mut Grid, y: usize, keys: &[Key], color: bool) {
+    const GAP: usize = 3;
+    let (x0, _) = column(grid.cols);
+    let end = grid.cols.saturating_sub(2);
+    grid.fill(
+        Rect {
+            x: 0,
+            y,
+            w: grid.cols,
+            h: 1,
+        },
+        Style::default(),
+    );
+    let width = |k: &Key| k.0.width() + 1 + k.1.width();
+    let mut keep: Vec<Key> = keys.to_vec();
+    let total = |ks: &[Key]| ks.iter().map(width).sum::<usize>() + GAP * ks.len().saturating_sub(1);
+    while keep.len() > 1 && x0 + 1 + total(&keep) > end {
+        keep.remove(keep.len() - 2);
+    }
+    let mut x = x0 + 1;
+    for (k, what) in keep {
+        x = grid.put(x, y, k, Style::accent(color), end);
+        x = grid.put(x + 1, y, what, Style::default(), end) + GAP;
     }
 }
 
@@ -208,11 +229,12 @@ mod tests {
         assert!(g.row_text(tea_y).contains("●"));
         let (_, other_y) = g.find("10m").unwrap();
         assert!(!g.row_text(other_y).contains("●"));
-        assert!(g.find("2 clocks").is_some());
-        assert!(g.find("add").is_some());
-        // The selected row is highlighted across its width.
-        assert_eq!(g.cell(1, tea_y).style.bg, Some(Ink::DarkGrey));
-        assert_eq!(g.cell(1, other_y).style.bg, None);
+        assert!(g.find("1 shown").is_some());
+        // The selected row is swapped across its width, the others are not.
+        let (x0, w) = column(80);
+        assert!(g.cell(x0, tea_y).style.reverse);
+        assert!(g.cell(x0 + w - 1, tea_y).style.reverse);
+        assert!(!g.cell(x0, other_y).style.reverse);
     }
 
     #[test]
@@ -230,17 +252,63 @@ mod tests {
             let row = g.row_text(y);
             for word in ["04:00", "10:00", "paused"] {
                 if let Some(x) = row.find(word) {
-                    let cell = g.cell(x, y);
-                    assert_ne!(
-                        cell.style.fg, cell.style.bg,
-                        "{name}: {word} hides in its row"
-                    );
+                    let st = g.cell(x, y).style;
+                    let hidden = st.fg.is_some() && st.fg == st.bg;
+                    assert!(!hidden, "{name}: {word} hides in its row");
+                    // Faint text on the swapped row would fade into it.
+                    assert!(!(st.reverse && st.dim), "{name}: {word} is faint");
                 }
             }
         }
-        // The selected row is the one that had the problem.
-        let tea_y = g.find("Tea").unwrap().1;
-        assert_eq!(g.cell(1, tea_y).style.bg, Some(Ink::DarkGrey));
+        // No theme colour stands in for faint text: bright black is the
+        // background in some palettes.
+        for y in 0..24 {
+            for x in 0..80 {
+                assert_ne!(g.cell(x, y).style.fg, Some(Ink::DarkGrey));
+                assert_ne!(g.cell(x, y).style.bg, Some(Ink::DarkGrey));
+            }
+        }
+    }
+
+    #[test]
+    fn running_needs_no_word_and_the_other_states_say_theirs() {
+        let mut timers = vec![
+            timer(Some("Tea"), 240, false),
+            timer(Some("Egg"), 60, false),
+        ];
+        timers[1].pause();
+        let mut g = Grid::new(80, 24);
+        compose(&mut g, &timers, 0, 0, None, true);
+        assert!(!g
+            .find("Tea")
+            .map(|(_, y)| g.row_text(y))
+            .unwrap()
+            .contains("running"));
+        assert!(g.find("paused").is_some());
+    }
+
+    #[test]
+    fn the_keys_follow_the_selected_clock() {
+        assert_eq!(keys(None), vec![("a", "add"), ("q", "quit")]);
+        let mut t = timer(None, 60, false);
+        assert!(keys(Some(&t)).contains(&("space", "pause")));
+        assert!(keys(Some(&t)).contains(&("v", "show")));
+        t.pause();
+        t.shown = true;
+        assert!(keys(Some(&t)).contains(&("space", "resume")));
+        assert!(keys(Some(&t)).contains(&("v", "hide")));
+    }
+
+    #[test]
+    fn the_toolbar_drops_keys_that_do_not_fit() {
+        let t = timer(None, 60, false);
+        let mut g = Grid::new(40, 3);
+        toolbar(&mut g, 2, &keys(Some(&t)), true);
+        let row = g.row_text(2);
+        assert!(row.contains("add"));
+        assert!(row.contains("q quit"), "quit always stays: {row:?}");
+        assert!(!row.contains("cancel"));
+        assert!(row.trim_end().len() <= 38);
     }
 
     #[test]
@@ -265,7 +333,7 @@ mod tests {
     #[test]
     fn notes_show_above_the_keys() {
         let mut g = Grid::new(80, 24);
-        compose(&mut g, &[], 0, 0, Some("Four clocks are on display"), true);
-        assert_eq!(g.find("Four clocks").unwrap().1, 22);
+        compose(&mut g, &[], 0, 0, Some("Four clocks are shown"), true);
+        assert_eq!(g.find("Four clocks").unwrap().1, 21);
     }
 }
