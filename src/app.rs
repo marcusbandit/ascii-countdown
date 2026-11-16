@@ -393,11 +393,16 @@ impl App {
             }
             View::Display => self.compose_display(&mut grid),
         }
-        let bar = rows.checked_sub(1).filter(|_| rows >= 4);
+        // The same size the list needs before it draws more than one line.
+        let bar = rows.checked_sub(1).filter(|_| rows >= 4 && cols >= 10);
         if let Some(form) = &self.form {
-            grid.dim_all();
-            form.draw(&mut grid, self.color);
-            if let Some(y) = bar.filter(|_| Form::fits(cols, rows)) {
+            // A window shrunk under the dialog keeps the list clear, and the
+            // form's keys still say how to close it.
+            if Form::fits(cols, rows) {
+                grid.dim_all();
+                form.draw(&mut grid, self.color);
+            }
+            if let Some(y) = bar {
                 manager::toolbar(&mut grid, y, &form.keys(), self.color);
             }
         } else if let (View::List, Some(y)) = (self.view, bar) {

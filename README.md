@@ -57,7 +57,7 @@ On the list:
 | Key | Does |
 | --- | --- |
 | j k, arrows | move |
-| enter | full screen |
+| enter | full screen, with the selected clock shown |
 | v | show or hide the selected clock |
 | a, e | add a clock, edit the selected one (name, type, time) |
 | space, r, x | pause, reset, cancel the selected clock |

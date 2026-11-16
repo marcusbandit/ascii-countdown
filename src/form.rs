@@ -1,6 +1,7 @@
 //! The add and edit dialog: a name, countdown or stopwatch, and a time.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use unicode_width::UnicodeWidthStr;
 
 use crate::duration;
 use crate::manager::Key;
@@ -203,7 +204,7 @@ impl Form {
         };
         grid.put(r.x + 2, r.y, heading, accent, r.x + w - 1);
 
-        let (x, end) = (r.x + 4, r.x + w - 3);
+        let (x, end) = (r.x + 3, r.x + w - 2);
         let value_x = x + 6;
         // The focused field gets a pointer as well as the accent, so focus
         // shows without colour too.
@@ -246,8 +247,22 @@ impl Form {
             },
             (true, false) => Style::default().reversed(),
         };
-        let after = grid.put(value_x, y + 1, " stopwatch ", chip(Kind::Stopwatch), end);
-        grid.put(after + 1, y + 1, " countdown ", chip(Kind::Countdown), end);
+        // Padded chips when they fit, bare words on the narrowest dialog.
+        let pad = if end - value_x >= 23 { " " } else { "" };
+        let after = grid.put(
+            value_x,
+            y + 1,
+            &format!("{pad}stopwatch{pad}"),
+            chip(Kind::Stopwatch),
+            end,
+        );
+        grid.put(
+            after + 1,
+            y + 1,
+            &format!("{pad}countdown{pad}"),
+            chip(Kind::Countdown),
+            end,
+        );
 
         if self.kind == Kind::Countdown {
             label(grid, y + 2, "Time", Field::Time);
@@ -260,7 +275,13 @@ impl Form {
             } else {
                 Style::default().bold()
             };
-            for (i, line) in wrap(e, end - x).iter().take(2).enumerate() {
+            // Two rows at most: a longer error ends its second row with an ellipsis.
+            let width = end - x;
+            let mut lines = wrap(e, width);
+            if lines.len() > 2 {
+                lines[1] = format!("{}…", truncate(&lines[1..].join(" "), width - 1));
+            }
+            for (i, line) in lines.iter().take(2).enumerate() {
                 grid.put(x, y + 3 + i, line, style, end);
             }
         }
@@ -272,7 +293,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.split(' ') {
         match lines.last_mut() {
-            Some(l) if l.chars().count() + 1 + word.chars().count() <= width => {
+            Some(l) if l.width() + 1 + word.width() <= width => {
                 l.push(' ');
                 l.push_str(word);
             }
@@ -435,5 +456,22 @@ mod tests {
             false,
         );
         assert_eq!(Form::edit(0, &t).keys()[0], ("enter", "save"));
+    }
+
+    #[test]
+    fn the_narrowest_dialog_shows_both_types_and_ends_a_long_error_plainly() {
+        let mut f = Form::new_clock();
+        press(&mut f, KeyCode::Tab);
+        let mut g = Grid::new(MIN_W, HEIGHT);
+        f.draw(&mut g, true);
+        assert!(g.find("stopwatch countdown").is_some());
+        press(&mut f, KeyCode::Char('l'));
+        press(&mut f, KeyCode::Tab);
+        typed(&mut f, "abcdef");
+        press(&mut f, KeyCode::Enter);
+        let mut g = Grid::new(32, 10);
+        f.draw(&mut g, true);
+        assert!(g.find("…").is_some());
+        assert_eq!(wrap("日本 語", 4), vec!["日本", "語"]);
     }
 }

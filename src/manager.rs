@@ -2,7 +2,7 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::display::{flash_style, tone_style};
+use crate::display::{flash_style, tone_style, Tone};
 use crate::screen::{truncate, Grid, Ink, Rect, Style};
 use crate::timer::Timer;
 
@@ -25,16 +25,19 @@ pub fn keys(t: Option<&Timer>) -> Vec<Key> {
         return vec![("a", "add"), ("q", "quit")];
     };
     // Most used first: a narrow bar drops keys from the end, but keeps quit.
-    vec![
-        ("a", "add"),
-        ("enter", "full screen"),
-        ("space", if t.is_paused() { "resume" } else { "pause" }),
+    let mut keys = vec![("a", "add"), ("enter", "full screen")];
+    // A clock whose time is up has nothing to pause; reset starts it over.
+    if !t.is_done() {
+        keys.push(("space", if t.is_paused() { "resume" } else { "pause" }));
+    }
+    keys.extend([
         ("e", "edit"),
         ("v", if t.shown { "hide" } else { "show" }),
         ("r", "reset"),
         ("x", "cancel"),
         ("q", "quit"),
-    ]
+    ]);
+    keys
 }
 
 /// Draws the list. `top` is the first row scrolled into view; the return value
@@ -75,12 +78,14 @@ pub fn compose(
         grid.put(x, head_y, &text, Style::default(), right);
     }
 
-    // The list runs from under the header to above the note and the keys.
+    // The list runs from under the header to above the note and the keys,
+    // with a row of air above the note once there is room for it.
+    let note_y = rows - 2 - usize::from(rows >= 12);
     let list = Rect {
         x: x0,
         y: head_y + 2,
         w,
-        h: rows.saturating_sub(head_y + 2 + 3),
+        h: note_y.saturating_sub(head_y + 2),
     };
     if timers.is_empty() {
         let text = "No clocks";
@@ -128,10 +133,12 @@ pub fn compose(
         grid.put(name_x, y, &name, name_style, time_end);
 
         let face = t.face();
-        let face_style = if plain {
-            base
-        } else {
-            tone_style(base, t.tone(), color)
+        // On the swapped row colour would clash, so the last seconds and a
+        // time that is up turn bold instead.
+        let face_style = match (plain, t.tone()) {
+            (true, Tone::Warn) => base.bold(),
+            (true, _) => base,
+            (false, tone) => tone_style(base, tone, color),
         };
         grid.put(
             time_end.saturating_sub(face.width()),
@@ -154,7 +161,7 @@ pub fn compose(
             ),
         };
         grid.put(
-            status_end - status.width(),
+            status_end.saturating_sub(status.width()),
             y,
             status,
             status_style,
@@ -165,7 +172,7 @@ pub fn compose(
     if let Some(n) = note {
         grid.put(
             x0 + 1,
-            rows - 3,
+            note_y,
             &truncate(n, w - 2),
             Style::default().bold(),
             right,
@@ -297,6 +304,11 @@ mod tests {
         t.shown = true;
         assert!(keys(Some(&t)).contains(&("space", "resume")));
         assert!(keys(Some(&t)).contains(&("v", "hide")));
+        let mut done = timer(None, 1, false);
+        done.clock.stop_at(std::time::Duration::from_secs(2));
+        done.check_done();
+        assert!(done.is_done());
+        assert!(!keys(Some(&done)).iter().any(|k| k.0 == "space"));
     }
 
     #[test]
@@ -335,5 +347,19 @@ mod tests {
         let mut g = Grid::new(80, 24);
         compose(&mut g, &[], 0, 0, Some("Four clocks are shown"), true);
         assert_eq!(g.find("Four clocks").unwrap().1, 21);
+    }
+
+    #[test]
+    fn a_tiny_list_still_fits_a_clock_and_never_underflows() {
+        let mut timers = vec![timer(Some("Egg"), 1, false)];
+        timers[0].clock.stop_at(std::time::Duration::from_secs(2));
+        timers[0].check_done();
+        for cols in 10..14 {
+            let mut g = Grid::new(cols, 5);
+            compose(&mut g, &timers, 0, 0, None, true);
+        }
+        let mut g = Grid::new(40, 5);
+        compose(&mut g, &timers, 0, 0, None, true);
+        assert!(g.find("Egg").is_some());
     }
 }

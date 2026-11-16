@@ -27,7 +27,7 @@ Options:
 
 Clock list:
   j k, arrows    move
-  enter          full screen: the shown clocks in big digits
+  enter          full screen, with the selected clock shown
   v              show or hide the selected clock; four fit at once
   a  e           add a clock, edit the selected one
   space  r  x    pause, reset, cancel the selected clock
