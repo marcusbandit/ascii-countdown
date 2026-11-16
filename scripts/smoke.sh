@@ -80,6 +80,40 @@ sleep 0.4
 check "SIGTERM restores the terminal" '[[ $(flags term) == "0 1" ]]'
 check "SIGTERM exits 130" '[[ $(exit_code term) == 130 ]]'
 
+count() { screen "$1" | grep -o "$2" | wc -l; }
+
+start multi -t Tea 3m -t Run stopwatch
+check "several clocks show their numbers and titles" 'screen multi | grep -q "1  Tea" && screen multi | grep -q "2  Run"'
+t send-keys -t smoke:multi 2
+sleep 0.3
+check "a number key pauses only that clock" '[[ $(count multi PAUSED) == 1 ]]'
+t send-keys -t smoke:multi Space
+sleep 0.3
+check "space then pauses every clock" '[[ $(count multi PAUSED) == 2 ]]'
+t send-keys -t smoke:multi Space
+sleep 0.3
+check "space again resumes every clock" '[[ $(count multi PAUSED) == 0 ]]'
+t send-keys -t smoke:multi q
+sleep 0.4
+check "quitting with a countdown left exits 1" '[[ $(exit_code multi) == 1 ]]'
+check "the stopwatch time still prints" '[[ $(wc -l < "$work/multi.out") == 1 ]]'
+
+start pair 1s 1s
+sleep 2.2
+check "two finished clocks both show TIME'S UP" "[[ \$(count pair \"TIME'S UP\") == 2 ]]"
+t send-keys -t smoke:pair x
+sleep 0.4
+check "any key quits once every clock finished" '[[ $(exit_code pair) == 0 ]]'
+
+start mixed 1s 5m
+sleep 2.2
+t send-keys -t smoke:mixed x
+sleep 0.4
+check "a key does not quit while another clock runs" '[[ -z $(exit_code mixed) ]]'
+t send-keys -t smoke:mixed q
+sleep 0.4
+check "q quits it with 1" '[[ $(exit_code mixed) == 1 ]]'
+
 start small 25m
 t resize-window -t smoke:small -x 30 -y 8
 sleep 0.4

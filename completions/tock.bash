@@ -2,7 +2,7 @@
 # ~/.local/share/bash-completion/completions/tock
 
 _tock() {
-  local cur prev i word target=0 up=0
+  local cur prev
   cur=${COMP_WORDS[COMP_CWORD]}
   prev=${COMP_WORDS[COMP_CWORD-1]}
 
@@ -10,27 +10,12 @@ _tock() {
     -t | --title) return 0 ;;
   esac
 
-  # Look at what is already on the line: a mode, a duration, or --up.
-  for ((i = 1; i < COMP_CWORD; i++)); do
-    word=${COMP_WORDS[i]}
-    case $word in
-      -t | --title) ((i++)) ;;
-      -u | --up) up=1 ;;
-      -*) ;;
-      *) target=1 ;;
-    esac
-  done
-
   if [[ $cur == -* ]]; then
-    local opts="--title --no-bell --help --version"
-    ((target || up)) || opts="$opts --up"
-    COMPREPLY=($(compgen -W "$opts" -- "$cur"))
+    COMPREPLY=($(compgen -W "--title --up --no-bell --help --version" -- "$cur"))
     return 0
   fi
-
-  if ((!target && !up)); then
-    COMPREPLY=($(compgen -W "stopwatch 5m 10m 15m 25m 45m 1h 1h30m 90s" -- "$cur"))
-  fi
+  # Every word that is not an option is another clock.
+  COMPREPLY=($(compgen -W "stopwatch 5m 10m 15m 25m 45m 1h 1h30m 90s" -- "$cur"))
   return 0
 }
 

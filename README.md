@@ -37,22 +37,31 @@ tock 1h30m            # or 90s, 1h2m3s, 45 (seconds)
 tock 10:00            # mm:ss, or h:mm:ss as in 1:30:00
 tock -t "Tea" 4m      # with a title above the clock
 tock stopwatch        # count up from zero, same as tock --up
+tock -t Tea 4m -t Pasta 10m stopwatch   # several clocks side by side
 ```
+
+Give up to nine clocks and they share the screen, laid out so the digits stay
+as big as possible. Each `-t` names the clock after it.
+
+![three clocks at once](docs/multi.png)
 
 | Key | Does |
 | --- | --- |
-| space | pause or resume |
-| r | reset to the start, keeping it paused or running |
+| space | pause or resume every clock |
+| 1 to 9 | pause or resume that clock |
+| r | reset every clock, keeping it paused or running |
 | q, Esc, Ctrl+C | quit |
 
 The digits scale to the largest size that fits and re-center when the window
 changes size. In the last ten seconds a countdown turns red. At zero the screen
 flashes red for four seconds and the terminal bell rings three times
-(`--no-bell` keeps it silent). Once it has hit zero, any key quits.
+(`--no-bell` keeps it silent). With several clocks only the finished one
+flashes, and the rest keep going. Once every countdown has hit zero, any key
+quits; r starts finished ones over.
 
-`tock` draws on the terminal itself, so stdout is free for scripts. The
-stopwatch prints the time it stopped at, and a countdown exits 0 only when it
-reached zero:
+`tock` draws on the terminal itself, so stdout is free for scripts. Each
+stopwatch prints the time it stopped at, one line each, and `tock` exits 0
+only when every countdown reached zero:
 
 ```sh
 tock 25m && notify-send "Take a break"
