@@ -131,11 +131,15 @@ pub fn compose(
         grid.put(name_x, y, &name, name_style, time_x);
 
         let face = t.face();
-        let face_style = if t.flashing() {
+        let mut face_style = if t.flashing() {
             base
         } else {
             tone_style(base, t.tone(), color)
         };
+        // Dark grey on the selected row's dark grey would hide a paused time.
+        if selected && color && face_style.fg == Some(Ink::DarkGrey) {
+            face_style.fg = Some(Ink::Grey);
+        }
         grid.put(
             time_x + time_w - face.width().min(time_w),
             y,
@@ -208,6 +212,27 @@ mod tests {
         // The selected row is highlighted across its width.
         assert_eq!(g.cell(1, tea_y).style.bg, Some(Ink::DarkGrey));
         assert_eq!(g.cell(1, other_y).style.bg, None);
+    }
+
+    #[test]
+    fn a_paused_time_stays_readable_on_the_selected_row() {
+        let mut timers = vec![
+            timer(Some("Tea"), 240, true),
+            timer(Some("Pasta"), 600, true),
+        ];
+        timers[0].pause();
+        timers[1].pause();
+        let mut g = Grid::new(80, 24);
+        compose(&mut g, &timers, 0, 0, None, true);
+        for name in ["Tea", "Pasta"] {
+            let (_, y) = g.find(name).unwrap();
+            let x = g.row_text(y).find("paused").unwrap();
+            let cell = g.cell(x, y);
+            assert_ne!(
+                cell.style.fg, cell.style.bg,
+                "{name}: text matches its background"
+            );
+        }
     }
 
     #[test]
