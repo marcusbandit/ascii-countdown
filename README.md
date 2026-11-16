@@ -38,7 +38,7 @@ tock stopwatch        # count up from zero, same as tock --up
 The digits scale to the largest size that fits and re-center when the window
 changes size. In the last ten seconds a countdown turns red. At zero the screen
 flashes red for four seconds and the terminal bell rings three times
-(`--no-bell` keeps it silent). After that, any key quits.
+(`--no-bell` keeps it silent). Once it has hit zero, any key quits.
 
 `tock` draws on the terminal itself, so stdout is free for scripts. The
 stopwatch prints the time it stopped at, and a countdown exits 0 only when it
