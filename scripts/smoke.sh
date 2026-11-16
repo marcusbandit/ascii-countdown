@@ -52,6 +52,8 @@ check "quitting a countdown early exits 1" '[[ $(exit_code cd) == 1 ]]'
 start done 1s
 sleep 1.2
 check "zero shows TIME'S UP" "screen done | grep -q \"TIME'S UP\""
+# tock ignores keys for 600 ms after zero; wait well past that.
+sleep 1
 t send-keys -t smoke:done x
 sleep 0.4
 check "any key quits a finished countdown with 0" '[[ $(exit_code done) == 0 ]]'
